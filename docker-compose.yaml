@@ -1,0 +1,54 @@
+# Standalone TTS service for the xcono/tts module: the faster-qwen3-tts Python
+# server (OpenAI-compatible speech synthesis on :8007, voice clone, streaming PCM).
+#
+# Decoupled from xcono/voices but joins the same `voices` network and reuses the
+# shared HF weight cache, so the orchestrator reaches it as `tts:8007` when both
+# stacks are up — and it still runs on its own for TTS debugging.
+#
+#   docker compose up -d            # build + run the TTS server
+#   go run ./cmd/say -text "..."    # then synthesise against it (writes a WAV)
+#
+# DO NOT build/up in a sandbox — needs the GPU box + NVIDIA Container Toolkit.
+
+name: tts
+
+services:
+  tts:
+    build:
+      context: ./llm/qwen3-tts
+    image: xcono-tts
+    ports:
+      - "8007:8007"
+    environment:
+      QWEN_TTS_MODEL: ${QWEN_TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-Base}  # 0.6B is the stable size on one card
+      # Self-heal: seconds a synthesis may stall before the server treats the CUDA
+      # context as wedged and exits for a clean restart. 0 disables. See
+      # llm/qwen3-tts/openai_server.py (the watchdog) + test_watchdog.py.
+      TTS_WATCHDOG_TIMEOUT: ${TTS_WATCHDOG_TIMEOUT:-120}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${TTS_GPU:-1}"]   # GPU1 by default; override for a single-card box
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    restart: unless-stopped
+
+# Shared with the xcono/voices stack so weights are downloaded once.
+volumes:
+  hf-cache:
+    name: llms_hf-cache
+    external: true
+
+# Literal `voices` network so this service and the voices orchestrator co-reside.
+networks:
+  default:
+    name: voices
