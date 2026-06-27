@@ -1,0 +1,10 @@
+# Go
+/bin/
+*.test
+*.out
+
+# Python (llm/ servers)
+__pycache__/
+*.pyc
+.venv*/
+.pytest_cache/
