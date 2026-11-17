@@ -15,6 +15,11 @@ import (
 // glitches. ~50 ms is the usual voice trade-off.
 const deviceBuffer = 50 * time.Millisecond
 
+// deviceTail is how long sound keeps coming out after the player's own buffer
+// has emptied: what is already in the hardware/sound-server buffer. oto cannot
+// report that part, so Pending holds on for this long after the buffer drains.
+const deviceTail = 2 * deviceBuffer
+
 // otoSink plays 16-bit mono PCM through an oto player. Write pushes samples
 // through an io.Pipe the player drains at real time, so Write blocks until the
 // audio is consumed — pacing the play loop exactly like a blocking device write.
@@ -33,6 +38,10 @@ type otoSink struct {
 	pw     *io.PipeWriter
 	player *oto.Player
 	closed bool
+
+	rate    int       // samples per second, to turn buffered bytes into time
+	wrote   bool      // audio was written since the last drain or flush
+	drained time.Time // when the player's buffer was first seen empty
 }
 
 // newOtoSink creates the process audio context (oto allows one) at the TTS wire
@@ -50,7 +59,7 @@ func newOtoSink(rate, _ int) (*otoSink, error) {
 	}
 	<-ready // hardware init can lag; block until the device is up
 
-	s := &otoSink{ctx: ctx}
+	s := &otoSink{ctx: ctx, rate: rate}
 	s.mu.Lock()
 	s.swapPlayerLocked()
 	s.mu.Unlock()
@@ -74,6 +83,7 @@ func (s *otoSink) swapPlayerLocked() {
 	p := s.ctx.NewPlayer(pr)
 	p.Play()
 	s.pr, s.pw, s.player = pr, pw, p
+	s.wrote, s.drained = false, time.Time{} // the old player's audio is gone
 }
 
 // Write feeds one PCM chunk to the player and blocks until it is consumed. A
@@ -86,6 +96,9 @@ func (s *otoSink) Write(samples []int16) error {
 	if closed || pw == nil {
 		return nil
 	}
+	s.mu.Lock()
+	s.wrote, s.drained = true, time.Time{}
+	s.mu.Unlock()
 	if _, err := pw.Write(ttsaudio.PCM16LE(samples)); err != nil {
 		if err == io.ErrClosedPipe {
 			return nil
@@ -93,6 +106,30 @@ func (s *otoSink) Write(samples []int16) error {
 		return err
 	}
 	return nil
+}
+
+// Pending reports how much written audio has not come out of the speaker yet.
+// Write returns once the player has taken the samples into its buffer — about
+// half a second ahead of the sound — so "everything written" is not "everything
+// heard". Zero means the reply has actually finished sounding.
+func (s *otoSink) Pending() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.player == nil || !s.wrote {
+		return 0
+	}
+	if n := s.player.BufferedSize(); n > 0 {
+		s.drained = time.Time{}
+		return time.Duration(n/2)*time.Second/time.Duration(s.rate) + deviceTail
+	}
+	if s.drained.IsZero() {
+		s.drained = time.Now()
+	}
+	if left := deviceTail - time.Since(s.drained); left > 0 {
+		return left
+	}
+	s.wrote = false
+	return 0
 }
 
 // Flush drops audio not yet played (barge-in) by swapping to a fresh player.

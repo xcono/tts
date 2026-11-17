@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/xcono/tts"
 )
 
 // fakeSynth maps text to a canned single-chunk clip.
@@ -62,6 +64,7 @@ type fakeSink struct {
 	ch      chan int16
 	flushed atomic.Int32
 	closed  atomic.Int32
+	pending atomic.Int64 // what the device still has to sound; the test sets it
 }
 
 func newFakeSink() *fakeSink { return &fakeSink{ch: make(chan int16, 8192)} }
@@ -73,8 +76,9 @@ func (s *fakeSink) Write(samples []int16) error {
 	return nil
 }
 
-func (s *fakeSink) Flush() error { s.flushed.Add(1); return nil }
-func (s *fakeSink) Close() error { s.closed.Add(1); return nil }
+func (s *fakeSink) Pending() time.Duration { return time.Duration(s.pending.Load()) }
+func (s *fakeSink) Flush() error           { s.flushed.Add(1); s.pending.Store(0); return nil }
+func (s *fakeSink) Close() error           { s.closed.Add(1); return nil }
 
 func (s *fakeSink) collect(n int, timeout time.Duration) []int16 {
 	out := make([]int16, 0, n)
@@ -95,6 +99,7 @@ func (s *fakeSink) collect(n int, timeout time.Duration) []int16 {
 type blockingSink struct{ ch chan []int16 }
 
 func (s blockingSink) Write(samples []int16) error { s.ch <- samples; return nil }
+func (blockingSink) Pending() time.Duration        { return 0 }
 func (blockingSink) Flush() error                  { return nil }
 func (blockingSink) Close() error                  { return nil }
 
@@ -442,5 +447,75 @@ func TestInterruptAbortsRequestAndDropsQueue(t *testing.T) {
 		if s.Status() != 0 {
 			t.Errorf("status = %v after everything played, want ready", s.Status())
 		}
+	}
+}
+
+func waitStatus(t *testing.T, s *Speaker, want tts.Status) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for s.Status() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("status = %v, want %v", s.Status(), want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestSpeakingUntilDeviceFinishedSounding(t *testing.T) {
+	// All audio has been handed to the device, but the device still has half a
+	// second to sound: the reply is not over, so the status must stay Speaking.
+	synth := fakeSynth{audio: map[string][]int16{"ответ": {1, 2, 3, 4}}}
+	sink := newFakeSink()
+	sink.pending.Store(int64(500 * time.Millisecond))
+	s := newSpeaker(synth, sink, 2, DefaultLookahead)
+	defer s.Close()
+
+	s.Enqueue("ответ")
+	sink.collect(4, 2*time.Second)
+	waitStatus(t, s, tts.Speaking)
+	time.Sleep(5 * drainPoll)
+	if got := s.Status(); got != tts.Speaking {
+		t.Fatalf("status = %v while the device is still sounding, want speaking", got)
+	}
+
+	sink.pending.Store(0) // the last sample has come out
+	waitStatus(t, s, tts.Ready)
+}
+
+func TestProcessingUntilFirstSound(t *testing.T) {
+	// Text is accepted and being synthesised, but nothing is heard yet.
+	synth := newScriptSynth()
+	s := newSpeaker(synth, newFakeSink(), 2, DefaultLookahead)
+	defer s.Close()
+
+	s.Enqueue("ответ")
+	synth.next(t)
+	waitStatus(t, s, tts.Processing)
+	time.Sleep(5 * drainPoll)
+	if got := s.Status(); got != tts.Processing {
+		t.Fatalf("status = %v before any audio, want processing", got)
+	}
+
+	synth.release <- struct{}{}
+	waitStatus(t, s, tts.Ready) // fake device: sounded at once
+}
+
+func TestInterruptWhileLastAudioIsSounding(t *testing.T) {
+	// Barge-in during the tail: the device is flushed, so nothing is left to
+	// sound and the speaker is Ready at once, not after the tail would have ended.
+	synth := fakeSynth{audio: map[string][]int16{"ответ": {1, 2}}}
+	sink := newFakeSink()
+	sink.pending.Store(int64(time.Hour))
+	s := newSpeaker(synth, sink, 2, DefaultLookahead)
+	defer s.Close()
+
+	s.Enqueue("ответ")
+	sink.collect(2, 2*time.Second)
+	waitStatus(t, s, tts.Speaking)
+
+	s.Interrupt()
+	waitStatus(t, s, tts.Ready)
+	if sink.flushed.Load() == 0 {
+		t.Error("Interrupt did not flush the device")
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/xcono/tts"
 	"github.com/xcono/tts/pkg/voiceq"
@@ -58,14 +59,20 @@ type Synth interface {
 }
 
 // sink is the playback device the engine writes PCM chunks to. Write blocks
-// until the audio is consumed (so the loop is paced by playback), Flush drops
-// any not-yet-played audio on barge-in, and Close frees the device. otoSink is
-// the real implementation; tests inject a fake.
+// until the device has taken the audio (so the loop is paced by playback),
+// Pending reports how much of it has not sounded yet, Flush drops any
+// not-yet-played audio on barge-in, and Close frees the device. otoSink is the
+// real implementation; tests inject a fake.
 type sink interface {
 	Write(samples []int16) error
+	Pending() time.Duration
 	Flush() error
 	Close() error
 }
+
+// drainPoll is how often the loop re-checks the device while the last audio of
+// a reply is still sounding — the resolution of the Speaking → Ready edge.
+const drainPoll = 20 * time.Millisecond
 
 // command is a control message into the Speaker's loop: a reply to enqueue, or a
 // barge-in interrupt. Both arrive on the same channel so they serialise with
@@ -111,6 +118,10 @@ type Speaker struct {
 	// message being synthesised ("" when none) and cancelSynth aborts it.
 	inFlight    string
 	cancelSynth context.CancelFunc
+
+	// sounding is true from the first chunk written to the device until the
+	// device reports that everything written has come out of the speaker.
+	sounding bool
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -184,8 +195,10 @@ func (s *Speaker) Interrupt() {
 	}
 }
 
-// Status reports the coarse playback state (Ready / Processing / Speaking); safe
-// to poll from any goroutine. Mirrors tts.Service.Status for the playback path.
+// Status reports the playback state by what is actually heard; safe to poll from
+// any goroutine. Processing: text is accepted but no sound is coming out (being
+// synthesised). Speaking: sound is coming out. Ready: nothing queued and the last
+// audio has finished sounding — not merely been handed to the device.
 func (s *Speaker) Status() tts.Status { return tts.Status(s.status.Load()) }
 
 // Close stops the playback loop, waits for it to drain, then frees the device.
@@ -213,7 +226,6 @@ func (s *Speaker) run() {
 	defer close(s.done)
 	for {
 		s.prefetch()
-		s.updateStatus()
 
 		cur := s.q.Current()
 
@@ -227,6 +239,7 @@ func (s *Speaker) run() {
 
 		// Playable = there are synthesised-but-unplayed samples right now.
 		playable := s.q.Playing() && cur != nil && s.q.Pos() < len(cur.Audio)
+		s.updateStatus(playable)
 		if playable {
 			select {
 			case <-s.ctx.Done():
@@ -241,7 +254,12 @@ func (s *Speaker) run() {
 			continue
 		}
 
-		// Idle, or waiting for the current message's next chunk.
+		// Idle, or waiting for the current message's next chunk. While the last
+		// audio written is still sounding, wake up to notice when it ends.
+		var drain <-chan time.Time
+		if s.sounding {
+			drain = time.After(drainPoll)
+		}
 		select {
 		case <-s.ctx.Done():
 			return
@@ -249,6 +267,7 @@ func (s *Speaker) run() {
 			s.handle(c)
 		case r := <-s.synthCh:
 			s.onSynth(r)
+		case <-drain:
 		}
 	}
 }
@@ -269,19 +288,24 @@ func (s *Speaker) handle(c command) {
 		s.inFlight = ""
 		s.q.Abandon()
 		_ = s.sink.Flush()
+		s.sounding = false // the flush dropped whatever was still to sound
 	case c.enqueue != "":
 		s.q.AppendAnswer(sessionID, c.enqueue)
 	}
 }
 
-// updateStatus derives the coarse status from queue/synth state: Speaking while
-// the play cursor is live, Processing while synthesis is in flight with nothing
-// to play yet, Ready otherwise.
-func (s *Speaker) updateStatus() {
+// updateStatus derives the status from what is heard, not from the queue:
+// Speaking while audio is being written or the device is still sounding what was
+// written, Processing while text is queued or in synthesis with no sound coming
+// out, Ready otherwise. playable says the loop is about to write a chunk.
+func (s *Speaker) updateStatus(playable bool) {
+	if s.sounding && !playable && s.sink.Pending() == 0 {
+		s.sounding = false
+	}
 	switch {
-	case s.q.Playing():
+	case s.sounding || playable:
 		s.status.Store(int32(tts.Speaking))
-	case s.inFlight != "":
+	case s.q.Playing() || s.inFlight != "":
 		s.status.Store(int32(tts.Processing))
 	default:
 		s.status.Store(int32(tts.Ready))
@@ -371,5 +395,6 @@ func (s *Speaker) playChunk() {
 		s.q.Stop()
 		return
 	}
+	s.sounding = true
 	s.q.Advance(end - pos)
 }
