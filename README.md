@@ -2,7 +2,7 @@
 
 Decoupled **text-to-speech "mouth"** for the realtime voice agent. A pure-Go
 client library + a small importable facade over an OpenAI-compatible TTS server
-(local faster-qwen3-tts by default, cloud ElevenLabs optionally), consumed
+(local OmniVoice by default, cloud ElevenLabs optionally), consumed
 in-process by [`xcono/voices`](../voices). No NATS — synthesis streams over Go
 channels / an emit callback (the LLM loop plays the PCM).
 
@@ -13,7 +13,7 @@ LLM loop ─► tts.Service ─┬─ Stream(text, emit) ── play-as-you-go (
 (../voices)              ├─ Batch(text) ──────── whole 24 kHz mono int16 clip
                          └─ Status() ─────────── ready | processing | speaking
                               │
-                              └─ Provider: Client (Qwen3-TTS) | ElevenLabs | Fallback
+                              └─ Provider: Client (local server) | ElevenLabs | Fallback
 ```
 
 All backends emit **24 kHz mono int16 LE PCM** (`tts.SampleRate`) — the wire
@@ -35,15 +35,17 @@ st := svc.Status()                       // ready | processing | speaking
 
 ## Providers
 
-- **qwen3** (default) — local faster-qwen3-tts via `POST /v1/audio/speech`
-  (`response_format:"pcm"`), voice clone, streaming. Needs the Python server (see below).
+- **qwen3** (default) — the local OpenAI-compatible server via
+  `POST /v1/audio/speech` (`response_format:"pcm"`), voice clone, streamed PCM.
+  The key keeps its historical name; the server behind it is now OmniVoice (see
+  below), and any server with the same contract works.
 - **elevenlabs** — remote ElevenLabs Flash; streams `pcm_24000`.
-- **fallback** — ElevenLabs primary, local Qwen3 secondary (degrade-to-local), so
+- **fallback** — ElevenLabs primary, local server secondary (degrade-to-local), so
   a cloud/network outage still speaks.
 
 ## Config
 
-`config.json` (schema in `pkg/config`); minimal `{}` defaults to local qwen3:
+`config.json` (schema in `pkg/config`); minimal `{}` defaults to the local server:
 
 ```json
 {
@@ -61,19 +63,29 @@ st := svc.Status()                       // ready | processing | speaking
 headless), logging status transitions and time-to-first-audio:
 
 ```bash
-go run ./cmd/say -text "Привет, мир" -o out.wav          # local Qwen3-TTS (:8007)
+go run ./cmd/say -text "Привет, мир" -o out.wav          # local server (:8007)
 go run ./cmd/say -config config.json -text "..."         # provider from config
 aplay out.wav                                            # play it
 ```
 
 ## The TTS server (external dependency)
 
-`llm/qwen3-tts/openai_server.py` is the faster-qwen3-tts OpenAI-compatible server
-(Python — the model lib has no Go equivalent). Run it via Docker:
+`llm/omnivoice/openai_server.py` is the OpenAI-compatible server for
+[OmniVoice](https://github.com/k2-fsa/OmniVoice) (Python — the model lib has no
+Go equivalent). Run it via Docker:
 
 ```bash
-docker compose up -d        # builds llm/qwen3-tts, serves :8007
+docker compose up -d        # builds llm/omnivoice, serves :8007
 ```
+
+OmniVoice renders a whole utterance at once, so the server splits the input into
+sentences and streams each sentence's PCM as soon as it is rendered. It reads the
+text as written: expand numbers and abbreviations to words before synthesis. The
+model weights are CC-BY-NC (non-commercial).
+
+The previous engine, faster-qwen3-tts (`llm/qwen3-tts`), is kept behind a compose
+profile: `docker compose --profile qwen3 up -d tts-qwen3` serves it on `:8009`.
+Current state, measurements and next steps: [`docs/tts-engine.md`](docs/tts-engine.md).
 
 The compose joins the shared `voices` network and reuses the `llms_hf-cache`
 volume, so it co-resides with the [`xcono/voices`](../voices) stack
@@ -87,4 +99,6 @@ Toolkit — don't build in a sandbox.**
 - `pkg/audio` — PCM16LE codec (no playback; the consumer owns the device).
 - `pkg/config` — config schema + loader.
 - `cmd/say` — standalone debug binary.
-- `llm/qwen3-tts` — the Python TTS server + its Dockerfile.
+- `llm/omnivoice` — the default Python TTS server + its Dockerfile.
+- `llm/qwen3-tts` — the previous server (compose profile `qwen3`); also holds the
+  shared reference voice `ref_stas.wav`.

@@ -1,12 +1,17 @@
-# Standalone TTS service for the xcono/tts module: the faster-qwen3-tts Python
-# server (OpenAI-compatible speech synthesis on :8007, voice clone, streaming PCM).
+# Standalone TTS service for the xcono/tts module: an OpenAI-compatible speech
+# server on :8007 (voice clone, raw 24 kHz PCM stream).
+#
+# Default engine: OmniVoice (llm/omnivoice) — picked 2026-11-17 in a blind
+# listening test against ZONOS3-Mini and Qwen3-TTS (see docs/tts-engine.md).
+# The previous engine, faster-qwen3-tts, stays available behind a profile:
+#
+#   docker compose up -d                             # OmniVoice on :8007
+#   docker compose --profile qwen3 up -d tts-qwen3   # Qwen3-TTS on :8009
+#   go run ./cmd/say -text "..."                     # synthesise against :8007 (writes a WAV)
 #
 # Decoupled from xcono/voices but joins the same `voices` network and reuses the
 # shared HF weight cache, so the orchestrator reaches it as `tts:8007` when both
 # stacks are up — and it still runs on its own for TTS debugging.
-#
-#   docker compose up -d            # build + run the TTS server
-#   go run ./cmd/say -text "..."    # then synthesise against it (writes a WAV)
 #
 # DO NOT build/up in a sandbox — needs the GPU box + NVIDIA Container Toolkit.
 
@@ -15,10 +20,39 @@ name: tts
 services:
   tts:
     build:
-      context: ./llm/qwen3-tts
+      context: ./llm                 # shared context: the image copies qwen3-tts/ref_stas.wav
+      dockerfile: omnivoice/Dockerfile
     image: xcono-tts
     ports:
       - "8007:8007"
+    environment:
+      OMNIVOICE_MODEL: ${OMNIVOICE_MODEL:-k2-fsa/OmniVoice}
+      OMNIVOICE_NUM_STEP: ${OMNIVOICE_NUM_STEP:-32}   # 16 is faster, 32 is the quality default
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${TTS_GPU:-1}"]   # GPU1 by default; override for a single-card box
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    restart: unless-stopped
+
+  # Previous engine. Not started by default; same contract on another host port.
+  tts-qwen3:
+    profiles: ["qwen3"]
+    build:
+      context: ./llm/qwen3-tts
+    image: xcono-tts-qwen3
+    ports:
+      - "8009:8007"
     environment:
       QWEN_TTS_MODEL: ${QWEN_TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-Base}  # 0.6B is the stable size on one card
       # Self-heal: seconds a synthesis may stall before the server treats the CUDA
@@ -32,7 +66,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${TTS_GPU:-1}"]   # GPU1 by default; override for a single-card box
+              device_ids: ["${TTS_GPU:-1}"]
               capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8007/health"]

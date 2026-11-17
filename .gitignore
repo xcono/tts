@@ -8,3 +8,7 @@ __pycache__/
 *.pyc
 .venv*/
 .pytest_cache/
+
+# Archived experiments: keep the write-ups and scripts, not the audio or logs
+docs/archive/**/samples/
+docs/archive/**/*.log

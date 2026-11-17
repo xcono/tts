@@ -1,0 +1,12 @@
+fast	29ch	empty=4/8	durs=[2.64, 0.16, 0.24, 2.08, 2.48, 0.16, 3.2, 0.24]	0.77s/run
+fast	54ch	empty=2/8	durs=[3.92, 4.32, 0.16, 0.24, 3.76, 3.6, 3.68, 3.44]	1.29s/run
+fast	57ch	empty=6/8	durs=[0.24, 3.68, 0.4, 0.16, 4.4, 0.16, 0.24, 0.16]	0.57s/run
+peak_alloc_GiB 4.68
+native	29ch	empty=0/8	durs=[1.92, 2.96, 2.8, 2.4, 2.24, 2.16, 2.08, 2.48]	2.37s/run
+native	54ch	empty=0/8	durs=[3.68, 4.16, 3.52, 3.76, 4.24, 3.68, 3.52, 4.32]	2.22s/run
+native	57ch	empty=0/8	durs=[4.56, 4.4, 3.52, 4.0, 4.32, 4.0, 4.48, 3.28]	2.31s/run
+peak_alloc_GiB 4.42
+fastns	29ch	empty=5/8	durs=[2.48, 2.32, 0.24, 2.48, 0.24, 0.16, 0.16, 0.16]	0.62s/run
+fastns	54ch	empty=4/8	durs=[3.28, 3.68, 0.24, 3.6, 0.16, 0.16, 3.76, 0.24]	0.88s/run
+fastns	57ch	empty=5/8	durs=[5.12, 0.16, 0.16, 4.24, 0.24, 0.16, 4.4, 0.16]	0.84s/run
+peak_alloc_GiB 4.7

@@ -34,7 +34,7 @@ tts.Service (tts.go) ─┬─ Stream(ctx, text, emit)  play-as-you-go
   `NewWith(p)` injects any `Provider`. `Stream` drives `Status` (Processing →
   Speaking on first chunk → Ready on return); `Batch` routes through `Stream`.
 - `provider.go` — `Provider` = `Synthesizer` (streaming) + one-shot `Synthesize`.
-  `Client` (local Qwen3), `ElevenLabs` (cloud), and `Fallback` all satisfy it.
+  `Client` (local server), `ElevenLabs` (cloud), and `Fallback` all satisfy it.
 - `client.go` — `POST /v1/audio/speech` with `response_format:"pcm"`; emits each
   24 kHz mono int16 LE chunk as it arrives.
 - `pkg/audio` — PCM16LE encode/decode only. **No playback** — the consumer
@@ -62,17 +62,35 @@ boundary if you ever cross them (the consumer's concern, not this module's).
   `Batch` are not safe to call concurrently on one `Service`. Serialise in the consumer.
 - **`pcm` response format** — raw int16 stream, no header (`wav` prepends a
   fake-length streaming header; `mp3` is non-streaming).
-- **Fallback is degrade-to-local** — ElevenLabs primary, Qwen3 secondary; a cloud
-  outage still speaks. Don't invert the order.
+- **Fallback is degrade-to-local** — ElevenLabs primary, local server secondary; a
+  cloud outage still speaks. Don't invert the order.
+- **Sentence-level streaming.** OmniVoice is not autoregressive; the server
+  streams one sentence at a time, so chunks are whole sentences, not ~100 ms frames.
+- **Text is read as written.** No number/abbreviation normalization for Russian,
+  and marking stress on every word degrades the voice — mark only the words that
+  come out wrong (U+0301 after the vowel).
+- **Pin the Python deps.** An unpinned rebuild of the Qwen3 image pulled a
+  transformers release that could not load the model; `llm/omnivoice/Dockerfile`
+  pins torch, transformers and omnivoice to the set verified on the rig.
 - **NATS-free by design.** If you need an event bus, it belongs in the consumer,
   not here — synthesis is a channel/callback stream.
 
 ## Python constraint
 
-`llm/qwen3-tts/openai_server.py` (faster-qwen3-tts) is Python — the model lib has
-no Go equivalent, so it stays an external server pointed at via
-`qwen3.base_url`. The Go side is a thin client. If a Go-native TTS becomes
-viable, replace the `Client`.
+`llm/omnivoice/openai_server.py` (OmniVoice, the default engine since 2026-11-17)
+is Python — the model lib has no Go equivalent, so it stays an external server
+pointed at via `qwen3.base_url` (the config key keeps its historical name). The
+Go side is a thin client. `llm/qwen3-tts` (faster-qwen3-tts) is the previous
+engine, kept behind the compose profile `qwen3`; both servers speak the same
+contract. If a Go-native TTS becomes viable, replace the `Client`.
+
+## Docs
+
+- `docs/tts-engine.md` — the current engine: settings, measurements, limits,
+  next steps, how to revive the runner-ups. Read this first for engine questions.
+- `docs/specs/` — module specs.
+- `docs/archive/` — **historical, superseded.** Research reports and experiment
+  scripts from the engine search; do not use them as current facts.
 
 ## Development
 

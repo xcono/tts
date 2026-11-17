@@ -1,0 +1,2 @@
+None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+так, колл+еги, у н+ас на проде леж+ит чек+аут. Я задепл+оил н+овый рел+из, и ср+азу пос+ыпались пятис+отки. снач+ала греш+ил на race condition в в+оркере, но по тр+ейсам в+идно — +это connection pool в Postgres исч+ерпался, потом+у что кт+о-то заб+ыл закр+ыть транз+акцию. откат+ил д+еплой, п+однял р+еплику и пок+а заф+иксил х+отфиксом. сиж+у, грепл+ю л+оги в Kibana и пь+ю тр+етий эспр+ессо.
