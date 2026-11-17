@@ -2,7 +2,8 @@
 // turns reply text into sound. It is the playback counterpart of the synthesis
 // facade in the parent tts package — where tts.Service only produces PCM ("a
 // dumb speaker"), play.Speaker plays it, with a play-as-you-go timeline,
-// look-ahead synthesis, and chunk-granular barge-in.
+// look-ahead synthesis, merging of queued text into larger fragments, and
+// chunk-granular barge-in.
 //
 // This is the one cgo-free audio device in the stack: it drives github.com/
 // ebitengine/oto/v3 (pure-Go PulseAudio + dlopen'd ALSA at runtime), so the tts
@@ -29,9 +30,22 @@ import (
 // ~100 ms of the current message.
 const DefaultChunk = 2400
 
-// DefaultLookahead is how many messages (current included) to synthesise ahead
-// of the play cursor, so the next paragraph is ready when the current ends.
+// DefaultLookahead is how many fragments (current included) to synthesise ahead
+// of the play cursor: the one playing and one in reserve. Synthesis is several
+// times faster than speech, so one fragment in reserve is always ready in time;
+// a larger reserve would not bring sound any sooner. It would cost two things:
+// text already sent can no longer be merged with what arrives later, and the
+// server cannot cancel a request, so on barge-in everything sent is still
+// rendered before the next reply gets the GPU.
 const DefaultLookahead = 2
+
+// DefaultMaxFragment is the most characters sent to the synthesiser in one
+// request when queued messages are merged — about 18 s of speech. The model
+// intones one request as one passage, so merging removes the seams between
+// separately rendered sentences; the cap bounds how long one request takes
+// (and so how long the GPU stays busy after a barge-in). 0 disables merging:
+// every enqueued message is its own request.
+const DefaultMaxFragment = 250
 
 const sessionID = "main" // single conversation for now
 
@@ -70,19 +84,33 @@ type synthChunk struct {
 	done  bool
 }
 
+// Option adjusts a Speaker at construction.
+type Option func(*Speaker)
+
+// WithMaxFragment sets the merge cap in characters (see DefaultMaxFragment);
+// 0 sends every enqueued message as its own request.
+func WithMaxFragment(chars int) Option {
+	return func(s *Speaker) { s.maxFragment = max(chars, 0) }
+}
+
 // Speaker owns the output device and plays enqueued replies. All queue state
 // lives in the run goroutine; callers touch it only through Enqueue/Interrupt.
 type Speaker struct {
-	synth     Synth
-	sink      sink
-	chunk     int
-	lookahead int
+	synth       Synth
+	sink        sink
+	chunk       int
+	lookahead   int
+	maxFragment int
 
-	cmds     chan command
-	synthCh  chan synthChunk
-	q        voiceq.Queue
-	inFlight map[string]bool
-	status   atomic.Int32
+	cmds    chan command
+	synthCh chan synthChunk
+	q       voiceq.Queue
+	status  atomic.Int32
+
+	// At most one synthesis request is out at a time: inFlight is the ID of the
+	// message being synthesised ("" when none) and cancelSynth aborts it.
+	inFlight    string
+	cancelSynth context.CancelFunc
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -93,18 +121,18 @@ type Speaker struct {
 // NewSpeaker opens the default output device (oto) and starts the playback
 // goroutine. It owns the device and frees it on Close. synth supplies the PCM
 // for enqueued text.
-func NewSpeaker(synth Synth) (*Speaker, error) {
+func NewSpeaker(synth Synth, opts ...Option) (*Speaker, error) {
 	d, err := newOtoSink(tts.SampleRate, DefaultChunk)
 	if err != nil {
 		return nil, err
 	}
-	return newSpeaker(synth, d, DefaultChunk, DefaultLookahead), nil
+	return newSpeaker(synth, d, DefaultChunk, DefaultLookahead, opts...), nil
 }
 
 // newSpeaker wires the engine over an injected sink — used by NewSpeaker with
 // the oto device, and by tests with a fake sink (no device). chunk<=0 and
 // lookahead<=0 fall back to the defaults.
-func newSpeaker(synth Synth, snk sink, chunk, lookahead int) *Speaker {
+func newSpeaker(synth Synth, snk sink, chunk, lookahead int, opts ...Option) *Speaker {
 	if chunk <= 0 {
 		chunk = DefaultChunk
 	}
@@ -113,23 +141,28 @@ func newSpeaker(synth Synth, snk sink, chunk, lookahead int) *Speaker {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Speaker{
-		synth:     synth,
-		sink:      snk,
-		chunk:     chunk,
-		lookahead: lookahead,
-		cmds:      make(chan command, 16),
-		synthCh:   make(chan synthChunk, 64),
-		inFlight:  map[string]bool{},
-		ctx:       ctx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
+		synth:       synth,
+		sink:        snk,
+		chunk:       chunk,
+		lookahead:   lookahead,
+		maxFragment: DefaultMaxFragment,
+		cmds:        make(chan command, 16),
+		synthCh:     make(chan synthChunk, 64),
+		ctx:         ctx,
+		cancel:      cancel,
+		done:        make(chan struct{}),
+	}
+	for _, o := range opts {
+		o(s)
 	}
 	go s.run()
 	return s
 }
 
-// Enqueue queues a reply to be spoken. It is split into paragraphs and played in
-// order after anything already queued; if the speaker is idle it starts at once.
+// Enqueue queues a reply to be spoken, after anything already queued; if the
+// speaker is idle it is synthesised at once, as is, so sound starts as early as
+// possible. Text enqueued while something is being synthesised or played waits,
+// and goes out merged into one request (see DefaultMaxFragment).
 // Non-blocking once the loop is running (the command buffer absorbs bursts).
 func (s *Speaker) Enqueue(text string) {
 	if strings.TrimSpace(text) == "" {
@@ -141,9 +174,9 @@ func (s *Speaker) Enqueue(text string) {
 	}
 }
 
-// Interrupt is barge-in: it stops the current utterance within ~one chunk and
-// drops any audio already synthesised ahead of the cursor for it. The next
-// Enqueue starts fresh.
+// Interrupt is barge-in: it stops the current utterance within ~one chunk,
+// aborts the synthesis request in flight, and drops everything still queued —
+// audio synthesised ahead and text not yet sent. The next Enqueue starts fresh.
 func (s *Speaker) Interrupt() {
 	select {
 	case s.cmds <- command{interrupt: true}:
@@ -220,13 +253,21 @@ func (s *Speaker) run() {
 	}
 }
 
-// handle applies a control command. Interrupt pauses the queue and flushes the
-// device so buffered audio stops immediately; Enqueue appends a reply (paragraph
-// per message). On an idle queue, Append starts playback at the new content.
+// handle applies a control command. Interrupt aborts the request in flight,
+// empties the queue and flushes the device so buffered audio stops immediately;
+// Enqueue appends a reply (paragraph per message). On an idle queue, Append
+// starts playback at the new content.
 func (s *Speaker) handle(c command) {
 	switch {
 	case c.interrupt:
-		s.q.Pause()
+		if s.cancelSynth != nil {
+			// Closes the HTTP request. A late chunk or done marker from it is
+			// ignored by onSynth, because inFlight no longer names it.
+			s.cancelSynth()
+			s.cancelSynth = nil
+		}
+		s.inFlight = ""
+		s.q.Abandon()
 		_ = s.sink.Flush()
 	case c.enqueue != "":
 		s.q.AppendAnswer(sessionID, c.enqueue)
@@ -240,48 +281,73 @@ func (s *Speaker) updateStatus() {
 	switch {
 	case s.q.Playing():
 		s.status.Store(int32(tts.Speaking))
-	case len(s.inFlight) > 0:
+	case s.inFlight != "":
 		s.status.Store(int32(tts.Processing))
 	default:
 		s.status.Store(int32(tts.Ready))
 	}
 }
 
-// prefetch starts synthesis for any upcoming message (current + lookahead) that
-// isn't done and isn't already in flight. Each goroutine streams PCM chunks back
-// on synthCh, followed by a done marker; both are folded in by onSynth (from the
-// loop), so the queue is only mutated in the single run goroutine.
+// prefetch sends the next fragment to the synthesiser, one request at a time:
+// nothing goes out while a request is in flight, and the next one goes out as
+// soon as it returns — playback of earlier audio does not hold it back. Only the
+// current message and the reserve after it (lookahead) are eligible.
+//
+// The message under the cursor is sent as is. A reserve message first absorbs
+// the messages queued behind it, up to maxFragment characters. The goroutine
+// streams PCM chunks back on synthCh, followed by a done marker; both are folded
+// in by onSynth (from the loop), so the queue is only mutated in the run goroutine.
 func (s *Speaker) prefetch() {
-	for _, m := range s.q.Upcoming(s.lookahead) {
-		if s.inFlight[m.ID] || m.Done {
+	if s.inFlight != "" {
+		return
+	}
+	for i, m := range s.q.Upcoming(s.lookahead) {
+		if m.Done {
 			continue
 		}
-		s.inFlight[m.ID] = true
-		id, text := m.ID, m.Text
-		go func() {
-			// SynthesizeStream hands us a freshly-allocated slice per chunk, so it
-			// is safe to send on the channel without copying. A synth error just
-			// ends the stream early; the done marker still finalises the message
-			// so the queue advances instead of stalling.
-			_ = s.synth.SynthesizeStream(s.ctx, text, func(chunk []int16) error {
-				select {
-				case s.synthCh <- synthChunk{id: id, audio: chunk}:
-					return nil
-				case <-s.ctx.Done():
-					return s.ctx.Err()
-				}
-			})
-			select {
-			case s.synthCh <- synthChunk{id: id, done: true}:
-			case <-s.ctx.Done():
-			}
-		}()
+		text := m.Text
+		if i > 0 && s.maxFragment > 0 {
+			text = s.q.MergePending(m.ID, s.maxFragment)
+		}
+		s.synthesise(m.ID, text)
+		return
 	}
 }
 
+// synthesise starts the request for one fragment under its own context, so a
+// barge-in can abort this request without stopping the Speaker.
+func (s *Speaker) synthesise(id, text string) {
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.inFlight, s.cancelSynth = id, cancel
+	go func() {
+		defer cancel()
+		// SynthesizeStream hands us a freshly-allocated slice per chunk, so it is
+		// safe to send on the channel without copying. A synth error just ends
+		// the stream early; the done marker still finalises the message so the
+		// queue advances instead of stalling.
+		_ = s.synth.SynthesizeStream(ctx, text, func(chunk []int16) error {
+			select {
+			case s.synthCh <- synthChunk{id: id, audio: chunk}:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+		select {
+		case s.synthCh <- synthChunk{id: id, done: true}:
+		case <-s.ctx.Done():
+		}
+	}()
+}
+
+// onSynth folds one unit of synthesis into the queue. Anything from a request
+// that is no longer the one in flight (aborted by a barge-in) is dropped.
 func (s *Speaker) onSynth(r synthChunk) {
+	if r.id != s.inFlight {
+		return
+	}
 	if r.done {
-		delete(s.inFlight, r.id)
+		s.inFlight, s.cancelSynth = "", nil
 		s.q.MarkDone(r.id)
 		return
 	}

@@ -238,3 +238,209 @@ func TestCloseStopsLoopAndClosesSink(t *testing.T) {
 		t.Errorf("second Close re-closed the sink (count=%d)", sink.closed.Load())
 	}
 }
+
+// scriptSynth is a synthesiser the test drives by hand: every request is
+// announced on asked and then blocks until the test releases it (or its context
+// is cancelled). It records how many requests ran at once and which contexts
+// were cancelled.
+type scriptSynth struct {
+	asked     chan string
+	release   chan struct{}
+	cancelled chan string
+	running   atomic.Int32
+	maxAtOnce atomic.Int32
+}
+
+func newScriptSynth() *scriptSynth {
+	return &scriptSynth{
+		asked:     make(chan string, 16),
+		release:   make(chan struct{}, 16),
+		cancelled: make(chan string, 16),
+	}
+}
+
+func (s *scriptSynth) SynthesizeStream(ctx context.Context, text string, emit func([]int16) error) error {
+	n := s.running.Add(1)
+	defer s.running.Add(-1)
+	for {
+		m := s.maxAtOnce.Load()
+		if n <= m || s.maxAtOnce.CompareAndSwap(m, n) {
+			break
+		}
+	}
+	s.asked <- text
+	select {
+	case <-s.release:
+		return emit([]int16{1, 1})
+	case <-ctx.Done():
+		s.cancelled <- text
+		return ctx.Err()
+	}
+}
+
+func (s *scriptSynth) next(t *testing.T) string {
+	t.Helper()
+	select {
+	case x := <-s.asked:
+		return x
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for a synthesis request")
+		return ""
+	}
+}
+
+func (s *scriptSynth) none(t *testing.T, why string) {
+	t.Helper()
+	select {
+	case x := <-s.asked:
+		t.Fatalf("unexpected synthesis request %q: %s", x, why)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// drain keeps a blocking sink readable until the returned stop func is called.
+func drain(sink blockingSink) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-sink.ch:
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
+func TestMergesTextQueuedWhileFirstIsSynthesised(t *testing.T) {
+	// The first message goes out alone so sound starts at once; what piles up
+	// behind it goes out as ONE request, not one per sentence.
+	synth := newScriptSynth()
+	s := newSpeaker(synth, newFakeSink(), 2, DefaultLookahead)
+	defer s.Close()
+
+	s.Enqueue("Первое.")
+	if got := synth.next(t); got != "Первое." {
+		t.Fatalf("first request = %q, want the first message alone", got)
+	}
+	s.Enqueue("Второе.")
+	s.Enqueue("Третье.")
+	s.Enqueue("Четвёртое.")
+	synth.none(t, "a request is already in flight")
+
+	synth.release <- struct{}{}
+	if got, want := synth.next(t), "Второе. Третье. Четвёртое."; got != want {
+		t.Fatalf("second request = %q, want %q", got, want)
+	}
+	if m := synth.maxAtOnce.Load(); m != 1 {
+		t.Errorf("%d requests ran at once, want 1", m)
+	}
+}
+
+func TestMergeStopsAtTheCap(t *testing.T) {
+	synth := newScriptSynth()
+	// 15 characters: "Второе. Третье." fits exactly, the next message does not.
+	s := newSpeaker(synth, newFakeSink(), 2, DefaultLookahead, WithMaxFragment(15))
+	defer s.Close()
+
+	s.Enqueue("Первое.")
+	synth.next(t)
+	s.Enqueue("Второе.")
+	s.Enqueue("Третье.")
+	s.Enqueue("Четвёртое.")
+	synth.none(t, "a request is already in flight") // also lets the loop take all three in
+	synth.release <- struct{}{}
+	if got, want := synth.next(t), "Второе. Третье."; got != want {
+		t.Fatalf("second request = %q, want %q (cap 15)", got, want)
+	}
+}
+
+func TestNoMergeWhenCapIsZero(t *testing.T) {
+	synth := newScriptSynth()
+	sink := blockingSink{ch: make(chan []int16)}
+	s := newSpeaker(synth, sink, 2, DefaultLookahead, WithMaxFragment(0))
+	defer drain(sink)()
+	defer s.Close()
+
+	s.Enqueue("Первое.")
+	synth.next(t)
+	s.Enqueue("Второе.")
+	s.Enqueue("Третье.")
+	synth.release <- struct{}{}
+	if got := synth.next(t); got != "Второе." {
+		t.Fatalf("second request = %q, want %q (no merging)", got, "Второе.")
+	}
+}
+
+func TestKeepsOneFragmentInReserve(t *testing.T) {
+	// Playback of the first fragment is wedged on the sink. The reserve fragment
+	// is still synthesised, but the one after it must wait until playback moves on.
+	synth := newScriptSynth()
+	sink := blockingSink{ch: make(chan []int16)}
+	s := newSpeaker(synth, sink, 2, DefaultLookahead, WithMaxFragment(0))
+
+	s.Enqueue("Первое.")
+	s.Enqueue("Второе.")
+	s.Enqueue("Третье.")
+	synth.next(t)
+	synth.release <- struct{}{}
+	if got := synth.next(t); got != "Второе." {
+		t.Fatalf("reserve request = %q, want %q", got, "Второе.")
+	}
+	synth.release <- struct{}{}
+	synth.none(t, "the reserve is full while the first fragment is still playing")
+
+	// Let the first fragment play out: the cursor moves on and the third goes out.
+	stop := drain(sink)
+	if got := synth.next(t); got != "Третье." {
+		t.Fatalf("after playback moved on, request = %q, want %q", got, "Третье.")
+	}
+	synth.release <- struct{}{}
+	s.Close()
+	stop()
+}
+
+func TestInterruptAbortsRequestAndDropsQueue(t *testing.T) {
+	synth := newScriptSynth()
+	sink := newFakeSink()
+	s := newSpeaker(synth, sink, 2, DefaultLookahead)
+	defer s.Close()
+
+	s.Enqueue("Старое первое.")
+	s.Enqueue("Старое второе.")
+	if got := synth.next(t); got != "Старое первое." {
+		t.Fatalf("first request = %q", got)
+	}
+
+	s.Interrupt()
+	select {
+	case got := <-synth.cancelled:
+		if got != "Старое первое." {
+			t.Fatalf("cancelled %q, want the request in flight", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Interrupt did not cancel the request in flight")
+	}
+
+	// The interrupted reply's queued text must never be sent; the new reply is.
+	s.Enqueue("Новое.")
+	if got := synth.next(t); got != "Новое." {
+		t.Fatalf("after interrupt, request = %q, want %q", got, "Новое.")
+	}
+	synth.release <- struct{}{}
+	if got := sink.collect(2, 2*time.Second); !reflect.DeepEqual(got, []int16{1, 1}) {
+		t.Fatalf("played %v, want the new reply only", got)
+	}
+	synth.none(t, "nothing of the interrupted reply may be synthesised")
+	if s.Status() != 0 {
+		// Ready once the new reply has played out.
+		deadline := time.Now().Add(2 * time.Second)
+		for s.Status() != 0 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if s.Status() != 0 {
+			t.Errorf("status = %v after everything played, want ready", s.Status())
+		}
+	}
+}

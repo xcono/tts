@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Message is one voice message on the timeline — typically one paragraph of a
@@ -145,6 +146,66 @@ func (q *Queue) MarkDone(id string) bool {
 	return false
 }
 
+// MergePending folds the messages that directly follow id into it, as long as
+// they have not been synthesised yet, belong to the same session, and the joined
+// text stays within maxChars characters. It returns the resulting text of id
+// ("" if id is unknown). The message itself is never shortened: only whole
+// following messages are taken, so no sentence is cut.
+//
+// The speaker calls it right before it sends id to the synthesiser: text that
+// piled up while the previous fragment was being synthesised and played goes out
+// as one request, so the model voices it as one passage instead of several
+// separately intoned clips. Whatever does not fit stays queued for the next call.
+func (q *Queue) MergePending(id string, maxChars int) string {
+	i := q.index(id)
+	if i < 0 {
+		return ""
+	}
+	m := &q.msgs[i]
+	size := utf8.RuneCountInString(m.Text)
+	for i+1 < len(q.msgs) {
+		next := q.msgs[i+1]
+		if next.Done || next.Audio != nil || next.SessionID != m.SessionID {
+			break
+		}
+		add := 1 + utf8.RuneCountInString(next.Text)
+		if size+add > maxChars {
+			break
+		}
+		m.Text += " " + next.Text
+		size += add
+		q.msgs = append(q.msgs[:i+1], q.msgs[i+2:]...)
+	}
+	return m.Text
+}
+
+// index returns the position of the message with the given ID, or -1.
+func (q *Queue) index(id string) int {
+	for i := range q.msgs {
+		if q.msgs[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// Abandon is barge-in: playback stops and the rest of what was queued is thrown
+// away — the message under the cursor is closed (its audio released) and every
+// message after it is removed, so nothing of the interrupted reply is
+// synthesised or played later. The queue is left idle; the next Append starts at
+// the new content. Messages already played stay in the list.
+func (q *Queue) Abandon() {
+	q.playing = false
+	q.pos = 0
+	if len(q.msgs) == 0 {
+		return
+	}
+	q.msgs = q.msgs[:q.cursor+1]
+	cur := &q.msgs[q.cursor]
+	cur.Done = true
+	cur.Audio = nil
+}
+
 // Pause halts playback but keeps the position, so Resume continues mid-message.
 func (q *Queue) Pause() { q.playing = false }
 
@@ -224,8 +285,11 @@ func (q *Queue) Advance(n int) {
 }
 
 // finishCurrent moves to the next message if there is one, otherwise stops at
-// the end of the timeline.
+// the end of the timeline. The finished message's audio is released: at 24 kHz a
+// kept timeline costs about 170 MB per hour of speech. Its text stays, so the
+// list still records what was said; navigating back to it plays nothing.
 func (q *Queue) finishCurrent() {
+	q.msgs[q.cursor].Audio = nil
 	if q.cursor < len(q.msgs)-1 {
 		q.cursor++
 		q.pos = 0

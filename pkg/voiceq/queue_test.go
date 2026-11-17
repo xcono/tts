@@ -239,3 +239,72 @@ func TestSetAudioByID(t *testing.T) {
 		t.Error("SetAudio(unknown) = true, want false")
 	}
 }
+
+func TestMergePendingJoinsFollowingUpToCap(t *testing.T) {
+	var q Queue
+	for _, s := range []string{"Один.", "Два.", "Три.", "Четыре."} {
+		q.AppendAnswer("s", s)
+	}
+	second := q.Upcoming(2)[1].ID
+
+	// "Два. Три." is 9 characters; "Четыре." would make it 17.
+	if got := q.MergePending(second, 10); got != "Два. Три." {
+		t.Fatalf("merged = %q, want %q", got, "Два. Три.")
+	}
+	up := q.Upcoming(10)
+	if len(up) != 3 || up[1].Text != "Два. Три." || up[2].Text != "Четыре." {
+		t.Fatalf("queue after merge = %+v", up)
+	}
+}
+
+func TestMergePendingLeavesSynthesisedMessagesAlone(t *testing.T) {
+	var q Queue
+	q.AppendAnswer("s", "Один.")
+	q.AppendAnswer("s", "Два.")
+	q.AppendAnswer("s", "Три.")
+	up := q.Upcoming(3)
+	q.AppendAudio(up[2].ID, []int16{1})
+
+	if got := q.MergePending(up[1].ID, 100); got != "Два." {
+		t.Fatalf("merged = %q, want %q (next already has audio)", got, "Два.")
+	}
+}
+
+func TestAbandonDropsTheRestAndGoesIdle(t *testing.T) {
+	var q Queue
+	q.AppendAnswer("s", "Один.")
+	q.AppendAnswer("s", "Два.")
+	q.AppendAudio(q.Current().ID, []int16{1, 2, 3})
+	q.Advance(1)
+
+	q.Abandon()
+	if q.Playing() {
+		t.Fatal("still playing after Abandon")
+	}
+	if up := q.Upcoming(10); len(up) != 1 || !up[0].Done || up[0].Audio != nil {
+		t.Fatalf("after Abandon = %+v, want only the closed current message", up)
+	}
+
+	q.AppendAnswer("s", "Новое.")
+	if !q.Playing() || q.Current().Text != "Новое." || q.Pos() != 0 {
+		t.Fatalf("new content did not start: %+v pos=%d", q.Current(), q.Pos())
+	}
+}
+
+func TestFinishedMessageReleasesAudio(t *testing.T) {
+	var q Queue
+	q.AppendAnswer("s", "Один.")
+	q.AppendAnswer("s", "Два.")
+	first := q.Current().ID
+	q.AppendAudio(first, []int16{1, 2})
+	q.MarkDone(first)
+	q.Advance(2)
+
+	if q.Current().Text != "Два." {
+		t.Fatalf("cursor on %q, want the second message", q.Current().Text)
+	}
+	q.Prev()
+	if q.Current().Audio != nil {
+		t.Fatal("played message still holds its audio")
+	}
+}
