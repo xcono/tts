@@ -87,6 +87,10 @@ The previous engine, faster-qwen3-tts (`llm/qwen3-tts`), is kept behind a compos
 profile: `docker compose --profile qwen3 up -d tts-qwen3` serves it on `:8009`.
 Current state, measurements and next steps: [`docs/tts-engine.md`](docs/tts-engine.md).
 
+Planned: replace this server with vLLM-Omni serving the same model (about 0.5 s
+per sentence instead of 1.3 s on the RTX 5060 Ti) and move sentence cutting and
+queueing into the Go module.
+
 The compose joins the shared `voices` network and reuses the `llms_hf-cache`
 volume, so it co-resides with the [`xcono/voices`](../voices) stack
 (`tts:8007`) and still runs on its own. **Needs the GPU box + NVIDIA Container

@@ -92,6 +92,8 @@ def _wav_header(data_len: int) -> bytes:
 
 def _render(unit: str, speed: float) -> np.ndarray:
     """Render one synthesis unit to float32 mono PCM. Caller holds _model_lock."""
+    if cfg.seed is not None:
+        torch.manual_seed(cfg.seed)  # reproducible takes for A/B listening
     with torch.inference_mode():
         wavs = model.generate(
             text=unit,
@@ -162,6 +164,23 @@ async def speech(req: SpeechRequest):
     raise HTTPException(status_code=400, detail="response_format must be 'pcm' or 'wav'")
 
 
+def _apply_flashinfer(m, mode: str) -> None:
+    """Optionally swap attention/RMSNorm for FlashInfer kernels to cut latency.
+
+    Imported lazily: the production image has no flashinfer, and "off" must keep
+    it working unchanged. "graph" also captures one CUDA graph per sequence
+    length, recommended upstream for single-request serving.
+    """
+    if mode == "off":
+        return
+    if mode not in ("on", "graph"):
+        raise SystemExit(f"OMNIVOICE_FLASHINFER must be off|on|graph, got {mode!r}")
+    from omnivoice.models.omnivoice_flashinfer import apply_flashinfer
+
+    apply_flashinfer(m, enable_cuda_graph=(mode == "graph"))
+    logger.info("flashinfer enabled (mode=%s)", mode)
+
+
 def _load(args: argparse.Namespace) -> None:
     global model, clone_prompt
     from omnivoice import OmniVoice
@@ -169,6 +188,7 @@ def _load(args: argparse.Namespace) -> None:
     t = time.monotonic()
     m = OmniVoice.from_pretrained(args.model, device_map=args.device, dtype=torch.float16)
     logger.info("model %s loaded in %.1fs", args.model, time.monotonic() - t)
+    _apply_flashinfer(m, args.flashinfer)
     if not args.ref_text.strip():
         raise SystemExit("OMNIVOICE_REF_TEXT is required (an empty transcript makes omnivoice download Whisper)")
     # OmniVoice #282: the prompt encoder allocates without inference_mode by default.
@@ -192,6 +212,10 @@ def _args() -> argparse.Namespace:
     p.add_argument("--num-step", type=int, default=int(e("OMNIVOICE_NUM_STEP", "32")))
     p.add_argument("--guidance-scale", type=float, default=float(e("OMNIVOICE_GUIDANCE_SCALE", "2.0")))
     p.add_argument("--device", default=e("OMNIVOICE_DEVICE", "cuda:0"))
+    p.add_argument("--flashinfer", choices=("off", "on", "graph"), default=e("OMNIVOICE_FLASHINFER", "off"))
+    seed = e("OMNIVOICE_SEED")
+    p.add_argument("--seed", type=int, default=int(seed) if seed else None,
+                   help="fixed torch seed before each sentence (default: unseeded)")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8007)
     return p.parse_args()

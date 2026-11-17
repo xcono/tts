@@ -1,0 +1,13 @@
+--- /tmp/claude-1000/-home-xc-src-github-com-xcono-tts-llm/62cfa395-285a-4f9b-a2d0-5d8fd8779502/scratchpad/patch/platform.orig.py	2026-11-17 21:11:44.713987675 +0700
++++ /tmp/claude-1000/-home-xc-src-github-com-xcono-tts-llm/62cfa395-285a-4f9b-a2d0-5d8fd8779502/scratchpad/patch/platform.py	2026-11-17 21:12:27.061767969 +0700
+@@ -113,6 +113,10 @@
+         # FLASH_ATTN implementation that actually runs on Blackwell.
+         if is_blackwell:
+             flash_attn_supported = compute_supported and cls.has_flash_attn_4()
++            # LAB PATCH (tts-lab-vllm only): vLLM's bundled FA2 (vllm.vllm_flash_attn) runs on sm_120;
++            # verified varlen vs SDPA max|diff| 0.002 bf16. Allow it on workstation Blackwell.
++            if not flash_attn_supported and compute_capability is not None and compute_capability.major == 12:
++                flash_attn_supported = compute_supported
+         else:
+             flash_attn_supported = compute_supported and packages_available
+ 

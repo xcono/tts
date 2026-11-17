@@ -1,0 +1,14 @@
+warm 200 0.472
+warm 200 0.64
+short 0 200 first 0.46 full 0.46 audio 4.16 s | before: W,C,util%,MiB = 20.40, 42, 0, 7859
+long 0 200 first 0.64 full 0.64 audio 7.36 s | before: W,C,util%,MiB = 20.41, 42, 0, 7859
+short 1 200 first 0.46 full 0.46 audio 4.16 s | before: W,C,util%,MiB = 20.39, 42, 0, 7859
+long 1 200 first 0.64 full 0.64 audio 7.36 s | before: W,C,util%,MiB = 20.41, 42, 0, 7859
+short 2 200 first 0.459 full 0.46 audio 4.14 s | before: W,C,util%,MiB = 20.37, 42, 0, 7859
+long 2 200 first 0.64 full 0.64 audio 7.36 s | before: W,C,util%,MiB = 20.43, 42, 0, 7859
+short 3 200 first 0.459 full 0.459 audio 4.16 s | before: W,C,util%,MiB = 20.40, 42, 0, 7859
+long 3 200 first 0.64 full 0.641 audio 7.36 s | before: W,C,util%,MiB = 20.38, 42, 0, 7859
+short 4 200 first 0.461 full 0.461 audio 4.16 s | before: W,C,util%,MiB = 20.42, 42, 0, 7859
+long 4 200 first 0.64 full 0.641 audio 7.36 s | before: W,C,util%,MiB = 20.42, 42, 0, 7859
+short median 0.46 min 0.459 max 0.461
+long median 0.64 min 0.64 max 0.641

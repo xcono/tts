@@ -1,0 +1,14 @@
+warm 200 0.859
+warm 200 0.999
+short 0 200 0.775 | before: W,C,util%,MiB = 20.09, 37, 0, 7523
+long 0 200 0.993 | before: W,C,util%,MiB = 20.06, 38, 0, 7515
+short 1 200 0.771 | before: W,C,util%,MiB = 20.16, 38, 0, 7523
+long 1 200 0.994 | before: W,C,util%,MiB = 20.17, 38, 0, 7515
+short 2 200 0.771 | before: W,C,util%,MiB = 20.20, 39, 0, 7523
+long 2 200 0.996 | before: W,C,util%,MiB = 20.22, 39, 0, 7515
+short 3 200 0.772 | before: W,C,util%,MiB = 20.27, 39, 0, 7523
+long 3 200 0.995 | before: W,C,util%,MiB = 20.26, 40, 0, 7515
+short 4 200 0.772 | before: W,C,util%,MiB = 20.32, 40, 0, 7523
+long 4 200 0.995 | before: W,C,util%,MiB = 20.34, 40, 0, 7515
+short median 0.772 min 0.771 max 0.775
+long median 0.995 min 0.993 max 0.996

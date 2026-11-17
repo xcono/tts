@@ -1,0 +1,229 @@
+# vLLM-Omni v0.32.0 (vllm/vllm-omni:v0.32.0), k2-fsa/OmniVoice, RTX 5060 Ti GPU 1, voice clone ref_stas.wav, ru, 32 steps, guidance 2.0, pcm, proto_vllm_omni.py
+## config 1: dtype bfloat16, enforce_eager true, max_num_seqs 1, gpu_memory_utilization 0.5 (OmniVoice CUDA graph: default on)
+warm 200 0.729
+warm 200 0.879
+short 0 200 first 0.698 full 0.698 audio 4.02 s | before: W,C,util%,MiB = 20.15, 39, 0, 7827
+long 0 200 first 0.882 full 0.882 audio 7.36 s | before: W,C,util%,MiB = 20.23, 39, 0, 7827
+short 1 200 first 0.698 full 0.698 audio 4.16 s | before: W,C,util%,MiB = 20.23, 40, 0, 7827
+long 1 200 first 0.881 full 0.881 audio 7.36 s | before: W,C,util%,MiB = 20.25, 40, 0, 7827
+short 2 200 first 0.699 full 0.699 audio 4.16 s | before: W,C,util%,MiB = 20.31, 40, 0, 7827
+long 2 200 first 0.88 full 0.881 audio 7.36 s | before: W,C,util%,MiB = 20.27, 40, 0, 7827
+short 3 200 first 0.697 full 0.697 audio 4.16 s | before: W,C,util%,MiB = 20.27, 41, 0, 7827
+long 3 200 first 0.882 full 0.882 audio 7.36 s | before: W,C,util%,MiB = 20.32, 41, 0, 7827
+short 4 200 first 0.697 full 0.697 audio 4.16 s | before: W,C,util%,MiB = 20.30, 41, 0, 7827
+long 4 200 first 0.881 full 0.881 audio 7.36 s | before: W,C,util%,MiB = 20.32, 41, 0, 7827
+short median 0.698 min 0.697 max 0.699
+long median 0.881 min 0.881 max 0.882
+
+## config 2: as config 1 but enforce_eager false (regional torch.compile per docs/user_guide/diffusion/regional_compilation.md)
+warm 200 0.841
+warm 200 0.913
+short 0 200 first 0.698 full 0.699 audio 4.16 s | before: W,C,util%,MiB = 20.28, 40, 0, 7841
+long 0 200 first 0.883 full 0.883 audio 7.36 s | before: W,C,util%,MiB = 20.23, 40, 0, 7841
+short 1 200 first 0.698 full 0.698 audio 3.72 s | before: W,C,util%,MiB = 20.24, 40, 0, 7841
+long 1 200 first 0.883 full 0.883 audio 7.36 s | before: W,C,util%,MiB = 20.29, 41, 0, 7841
+short 2 200 first 0.698 full 0.698 audio 4.14 s | before: W,C,util%,MiB = 20.29, 41, 0, 7841
+long 2 200 first 0.882 full 0.882 audio 7.36 s | before: W,C,util%,MiB = 20.25, 41, 0, 7841
+short 3 200 first 0.698 full 0.698 audio 4.16 s | before: W,C,util%,MiB = 20.27, 41, 0, 7841
+long 3 200 first 0.882 full 0.882 audio 7.32 s | before: W,C,util%,MiB = 20.26, 41, 0, 7841
+short 4 200 first 0.696 full 0.696 audio 4.16 s | before: W,C,util%,MiB = 20.32, 41, 0, 7841
+long 4 200 first 0.882 full 0.882 audio 7.36 s | before: W,C,util%,MiB = 20.27, 41, 0, 7841
+short median 0.698 min 0.696 max 0.699
+long median 0.882 min 0.882 max 0.883
+
+## summary
+best: config 1 (config 2 identical within 1 ms). short median 0.698 s, long median 0.881 s.
+GPU 1 memory: vLLM-Omni::DiffusionWorker 3032 MiB (card total 7793-7841 MiB with other processes).
+synthesis requests this session: 26 (1 first long + 12 protocol cfg1 + 12 protocol cfg2 + 1 short sample on cfg1).
+
+## config 3: as config 1 plus step_execution true; MINI protocol (2 warm-up + 1x short/long, 15 s pauses) - request budget (30) allowed only 4 more
+warm 200 0.866
+warm 200 0.934
+short 0 200 first 0.718 full 0.718 audio 4.16 s | before: W,C,util%,MiB = 20.02, 38, 0, 7841
+long 0 200 first 0.903 full 0.904 audio 7.36 s | before: W,C,util%,MiB = 20.07, 38, 0, 7841
+short median 0.718 min 0.718 max 0.718
+long median 0.904 min 0.904 max 0.904
+verdict: ~20 ms slower than config 1 (0.718/0.904 vs 0.698/0.881). Total synthesis requests this session: 30.
+
+## config 4: uploaded voice (POST /v1/audio/voices, request voice=stas, no ref_audio), otherwise config 1; MINI
+warm 200 0.836
+warm 200 0.912
+short 0 200 first 0.695 full 0.695 audio 4.16 s | before: W,C,util%,MiB = 20.12, 37, 0, 7841
+long 0 200 first 0.881 full 0.881 audio 7.25 s | before: W,C,util%,MiB = 20.06, 37, 0, 7841
+short median 0.695 min 0.695 max 0.695
+long median 0.881 min 0.881 max 0.881
+verdict: no gain (ref preparation is not the bottleneck).
+
+## FLASH_ATTN without patch: server refuses at init on sm_120:
+ValueError: FLASH_ATTN was explicitly selected but is unsupported (Blackwell requires CuTe FlashAttention-4 (flash_attn.cute / vllm-omni[fa4]); FA2/FA3 kernels are Hopper-only).
+Default backend on sm_120 with cuDNN 9.20 = CUDNN_ATTN, which has no packed-varlen support -> OmniVoice falls back to SDPA with a block mask.
+vllm.vllm_flash_attn (FA2, bundled in the image) varlen on sm_120: works, max|diff| vs SDPA 0.002 (bf16).
+
+## config 6 (BEST): config 1 + --diffusion-attention-backend FLASH_ATTN + patched platform gate (vllm-omni/platform-fa2-sm120.patch, mounted ro); MINI then FULL
+warm 200 0.689
+warm 200 0.684
+short 0 200 first 0.548 full 0.548 audio 4.02 s | before: W,C,util%,MiB = 20.11, 37, 0, 7839
+long 0 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.10, 38, 0, 7839
+short median 0.548 min 0.548 max 0.548
+long median 0.663 min 0.663 max 0.663
+-- full protocol:
+warm 200 0.546
+warm 200 0.662
+short 0 200 first 0.547 full 0.547 audio 4.16 s | before: W,C,util%,MiB = 20.16, 39, 0, 7839
+long 0 200 first 0.661 full 0.661 audio 7.36 s | before: W,C,util%,MiB = 20.16, 39, 0, 7839
+short 1 200 first 0.546 full 0.546 audio 4.16 s | before: W,C,util%,MiB = 20.25, 39, 0, 7839
+long 1 200 first 0.661 full 0.661 audio 7.36 s | before: W,C,util%,MiB = 20.17, 39, 0, 7839
+short 2 200 first 0.547 full 0.547 audio 4.16 s | before: W,C,util%,MiB = 20.16, 39, 0, 7839
+long 2 200 first 0.661 full 0.661 audio 7.36 s | before: W,C,util%,MiB = 20.22, 39, 0, 7839
+short 3 200 first 0.546 full 0.546 audio 4.16 s | before: W,C,util%,MiB = 20.22, 39, 0, 7839
+long 3 200 first 0.662 full 0.662 audio 7.36 s | before: W,C,util%,MiB = 20.27, 40, 0, 7839
+short 4 200 first 0.546 full 0.546 audio 4.16 s | before: W,C,util%,MiB = 20.22, 40, 0, 7839
+long 4 200 first 0.662 full 0.662 audio 7.36 s | before: W,C,util%,MiB = 20.26, 40, 0, 7839
+short median 0.546 min 0.546 max 0.547
+long median 0.661 min 0.661 max 0.662
+
+## config 5: config 6 but dtype float16; MINI
+warm 200 0.723
+warm 200 0.73
+short 0 200 first 0.583 full 0.583 audio 4.16 s | before: W,C,util%,MiB = 20.10, 39, 0, 7841
+long 0 200 first 0.704 full 0.705 audio 7.36 s | before: W,C,util%,MiB = 20.17, 39, 0, 7841
+short median 0.583 min 0.583 max 0.583
+long median 0.705 min 0.705 max 0.705
+verdict: slower than bf16.
+
+## final
+best: bf16 + FA2 (patched gate): short median 0.546 s, long median 0.661 s (vs default 0.698 / 0.881).
+samples/vllm-omni/vllm-omni-{short,long}.wav re-recorded on config 6 (cold first requests 0.673 / 0.692 s).
+synthesis requests this session: 56.
+
+########## ROUND 3 (orchestrator lifted the request cap; every config = full protocol). Base for all: bf16 + FA2 (gate patch) ##########
+Worker logs: lost in v0.32.0 (vllm-omni#8517). Recovered via sitecustomize.py mirror (vllm-omni/sitecustomize-worker-logs.py). Worker log shows:
+  Resolved diffusion attention backend 'FLASH_ATTN' for role='self'; OmniVoice CUDA Graph warmup complete (7 graphs) for keys 128..512;
+  on first requests lazy graphs captured: short -> key (1,640), long -> key (1,768). CUDA graphs ARE used.
+## re-run of best (bf16+FA2) with logging:
+short median 0.546 min 0.546 max 0.548
+long median 0.663 min 0.66 max 0.664
+
+## wait0
+request_batch_max_wait_ms 0
+warm 200 0.685
+warm 200 0.686
+short 0 200 first 0.547 full 0.547 audio 4.16 s | before: W,C,util%,MiB = 20.16, 39, 0, 7839
+long 0 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.20, 39, 0, 7839
+short 1 200 first 0.547 full 0.547 audio 4.16 s | before: W,C,util%,MiB = 20.25, 39, 0, 7839
+long 1 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.20, 40, 0, 7839
+short 2 200 first 0.548 full 0.548 audio 4.16 s | before: W,C,util%,MiB = 20.26, 40, 0, 7839
+long 2 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.28, 40, 0, 7839
+short 3 200 first 0.547 full 0.547 audio 4.16 s | before: W,C,util%,MiB = 20.26, 40, 0, 7839
+long 3 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.33, 40, 0, 7839
+short 4 200 first 0.547 full 0.547 audio 4.16 s | before: W,C,util%,MiB = 20.27, 40, 0, 7839
+long 4 200 first 0.662 full 0.662 audio 7.36 s | before: W,C,util%,MiB = 20.31, 41, 0, 7839
+short median 0.547 min 0.547 max 0.548
+long median 0.663 min 0.662 max 0.663
+
+## step
+step_execution true
+warm 200 0.707
+warm 200 0.72
+short 0 200 first 0.565 full 0.566 audio 4.16 s | before: W,C,util%,MiB = 20.23, 40, 0, 7839
+long 0 200 first 0.682 full 0.682 audio 7.36 s | before: W,C,util%,MiB = 20.31, 40, 0, 7839
+short 1 200 first 0.565 full 0.565 audio 4.02 s | before: W,C,util%,MiB = 20.31, 40, 0, 7839
+long 1 200 first 0.683 full 0.683 audio 7.36 s | before: W,C,util%,MiB = 20.29, 40, 0, 7839
+short 2 200 first 0.565 full 0.565 audio 4.16 s | before: W,C,util%,MiB = 20.35, 41, 0, 7839
+long 2 200 first 0.683 full 0.683 audio 7.36 s | before: W,C,util%,MiB = 20.31, 41, 0, 7839
+short 3 200 first 0.567 full 0.567 audio 4.16 s | before: W,C,util%,MiB = 20.26, 41, 0, 7839
+long 3 200 first 0.68 full 0.68 audio 7.36 s | before: W,C,util%,MiB = 20.36, 41, 0, 7839
+short 4 200 first 0.566 full 0.566 audio 4.16 s | before: W,C,util%,MiB = 20.32, 41, 0, 7839
+long 4 200 first 0.68 full 0.68 audio 7.36 s | before: W,C,util%,MiB = 20.38, 41, 0, 7839
+short median 0.566 min 0.565 max 0.567
+long median 0.682 min 0.68 max 0.683
+
+## voice
+voice uploaded via /v1/audio/voices, request voice=stas
+warm 200 0.681
+warm 200 0.687
+short 0 200 first 0.547 full 0.547 audio 4.16 s | before: W,C,util%,MiB = 20.28, 40, 0, 7839
+long 0 200 first 0.663 full 0.664 audio 7.36 s | before: W,C,util%,MiB = 20.28, 40, 0, 7839
+short 1 200 first 0.545 full 0.545 audio 4.16 s | before: W,C,util%,MiB = 20.29, 40, 0, 7839
+long 1 200 first 0.662 full 0.662 audio 7.33 s | before: W,C,util%,MiB = 20.31, 40, 0, 7839
+short 2 200 first 0.545 full 0.545 audio 4.16 s | before: W,C,util%,MiB = 20.31, 41, 0, 7839
+long 2 200 first 0.661 full 0.661 audio 7.36 s | before: W,C,util%,MiB = 20.34, 40, 0, 7839
+short 3 200 first 0.545 full 0.545 audio 4.16 s | before: W,C,util%,MiB = 20.27, 41, 0, 7839
+long 3 200 first 0.661 full 0.661 audio 7.36 s | before: W,C,util%,MiB = 20.30, 41, 0, 7839
+short 4 200 first 0.544 full 0.544 audio 4.16 s | before: W,C,util%,MiB = 20.33, 41, 0, 7839
+long 4 200 first 0.66 full 0.66 audio 7.33 s | before: W,C,util%,MiB = 20.32, 41, 0, 7839
+short median 0.545 min 0.544 max 0.547
+long median 0.661 min 0.66 max 0.664
+
+## fp16
+dtype float16
+warm 200 0.727
+warm 200 0.731
+short 0 200 first 0.583 full 0.583 audio 4.16 s | before: W,C,util%,MiB = 20.27, 40, 0, 7841
+long 0 200 first 0.704 full 0.704 audio 7.36 s | before: W,C,util%,MiB = 20.27, 40, 0, 7841
+short 1 200 first 0.584 full 0.584 audio 4.16 s | before: W,C,util%,MiB = 20.24, 40, 0, 7841
+long 1 200 first 0.705 full 0.705 audio 7.36 s | before: W,C,util%,MiB = 20.33, 40, 0, 7841
+short 2 200 first 0.585 full 0.585 audio 4.16 s | before: W,C,util%,MiB = 20.25, 40, 0, 7841
+long 2 200 first 0.704 full 0.704 audio 7.36 s | before: W,C,util%,MiB = 20.24, 40, 0, 7841
+short 3 200 first 0.582 full 0.582 audio 4.16 s | before: W,C,util%,MiB = 20.32, 40, 0, 7841
+long 3 200 first 0.705 full 0.705 audio 7.36 s | before: W,C,util%,MiB = 20.29, 40, 0, 7841
+short 4 200 first 0.582 full 0.583 audio 4.16 s | before: W,C,util%,MiB = 20.30, 40, 0, 7841
+long 4 200 first 0.705 full 0.705 audio 7.36 s | before: W,C,util%,MiB = 20.31, 40, 0, 7841
+short median 0.583 min 0.582 max 0.585
+long median 0.705 min 0.704 max 0.705
+
+## nograph
+OMNIVOICE_CUDA_GRAPH=0 (eager, exact length)
+warm 200 0.601
+warm 200 0.673
+short 0 200 first 0.497 full 0.497 audio 4.16 s | before: W,C,util%,MiB = 20.21, 39, 0, 7653
+long 0 200 first 0.675 full 0.675 audio 7.36 s | before: W,C,util%,MiB = 20.20, 40, 0, 7653
+short 1 200 first 0.497 full 0.497 audio 4.16 s | before: W,C,util%,MiB = 20.25, 40, 0, 7653
+long 1 200 first 0.673 full 0.673 audio 7.36 s | before: W,C,util%,MiB = 20.25, 40, 0, 7653
+short 2 200 first 0.497 full 0.497 audio 4.16 s | before: W,C,util%,MiB = 20.31, 40, 0, 7653
+long 2 200 first 0.673 full 0.673 audio 7.36 s | before: W,C,util%,MiB = 20.29, 40, 0, 7653
+short 3 200 first 0.496 full 0.496 audio 4.16 s | before: W,C,util%,MiB = 20.32, 40, 0, 7653
+long 3 200 first 0.673 full 0.673 audio 7.36 s | before: W,C,util%,MiB = 20.27, 40, 0, 7653
+short 4 200 first 0.496 full 0.496 audio 4.16 s | before: W,C,util%,MiB = 20.28, 40, 0, 7653
+long 4 200 first 0.671 full 0.671 audio 7.36 s | before: W,C,util%,MiB = 20.29, 40, 0, 7653
+short median 0.497 min 0.496 max 0.497
+long median 0.673 min 0.671 max 0.675
+
+## compile
+enforce_eager false
+warm 200 0.675
+warm 200 0.687
+short 0 200 first 0.549 full 0.549 audio 4.16 s | before: W,C,util%,MiB = 20.23, 39, 0, 7839
+long 0 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.21, 39, 0, 7839
+short 1 200 first 0.547 full 0.547 audio 4.16 s | before: W,C,util%,MiB = 20.24, 39, 0, 7839
+long 1 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.23, 40, 0, 7839
+short 2 200 first 0.547 full 0.547 audio 4.16 s | before: W,C,util%,MiB = 20.26, 40, 0, 7839
+long 2 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.26, 40, 0, 7839
+short 3 200 first 0.547 full 0.547 audio 4.16 s | before: W,C,util%,MiB = 20.26, 40, 0, 7839
+long 3 200 first 0.662 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.31, 40, 0, 7839
+short 4 200 first 0.546 full 0.546 audio 3.81 s | before: W,C,util%,MiB = 20.26, 40, 0, 7839
+long 4 200 first 0.661 full 0.661 audio 7.36 s | before: W,C,util%,MiB = 20.20, 40, 0, 7839
+short median 0.547 min 0.546 max 0.549
+long median 0.663 min 0.661 max 0.663
+
+## a32
+LAB PATCH 2: _LAZY_CAPTURE_ALIGNMENT 128 -> 32 (vllm-omni/omnivoice-lazy-align32.patch); log: short -> key (1,576), long -> (1,768)
+warm 200 0.619
+warm 200 0.687
+short 0 200 first 0.485 full 0.485 audio 4.16 s | before: W,C,util%,MiB = 20.15, 39, 0, 7839
+long 0 200 first 0.662 full 0.662 audio 7.36 s | before: W,C,util%,MiB = 20.26, 39, 0, 7839
+short 1 200 first 0.484 full 0.484 audio 4.16 s | before: W,C,util%,MiB = 20.26, 39, 0, 7839
+long 1 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.25, 39, 0, 7839
+short 2 200 first 0.483 full 0.483 audio 4.16 s | before: W,C,util%,MiB = 20.31, 39, 0, 7839
+long 2 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.29, 39, 0, 7839
+short 3 200 first 0.484 full 0.484 audio 4.16 s | before: W,C,util%,MiB = 20.26, 40, 0, 7839
+long 3 200 first 0.662 full 0.663 audio 7.24 s | before: W,C,util%,MiB = 20.25, 40, 0, 7839
+short 4 200 first 0.485 full 0.485 audio 4.16 s | before: W,C,util%,MiB = 20.30, 40, 0, 7839
+long 4 200 first 0.663 full 0.663 audio 7.36 s | before: W,C,util%,MiB = 20.27, 40, 0, 7839
+short median 0.484 min 0.483 max 0.485
+long median 0.663 min 0.662 max 0.663
+
+## FINAL (round 3)
+best: bf16 + FA2 gate patch + lazy graph alignment 32: short 0.484 s, long 0.663 s (default vLLM-Omni 0.698 / 0.881).
+samples/vllm-omni/vllm-omni-{short,long}.wav re-recorded on this config (0.487 / 0.660 s).
+not tried: OMNIVOICE_TF32=1 (code marks it not bit-identical; model runs bf16), FA4 (needs pip), TRTLLM_ATTN (gated to sm_100/103).

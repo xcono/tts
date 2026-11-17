@@ -1,0 +1,11 @@
+--- /tmp/claude-1000/-home-xc-src-github-com-xcono-tts-llm/62cfa395-285a-4f9b-a2d0-5d8fd8779502/scratchpad/patch/gen.orig.py	2026-11-17 21:51:57.079210919 +0700
++++ /tmp/claude-1000/-home-xc-src-github-com-xcono-tts-llm/62cfa395-285a-4f9b-a2d0-5d8fd8779502/scratchpad/patch/gen-a32.py	2026-11-17 21:51:57.156500269 +0700
+@@ -536,7 +536,7 @@
+ 
+     _MAX_LAZY_GRAPHS = 16
+     _STATIC_CAPTURE_TOKEN_LIMIT = 1024
+-    _LAZY_CAPTURE_ALIGNMENT = 128
++    _LAZY_CAPTURE_ALIGNMENT = 32  # LAB PATCH: was 128 (padding waste for >512-token single requests)
+ 
+     def __init__(self, generator: OmniVoiceGenerator, capture_sizes: list[int]) -> None:
+         self._gen = generator

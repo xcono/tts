@@ -1,0 +1,9 @@
+{
+  "host": "0.0.0.0", "port": 8080, "backend": "cuda", "device": 0, "threads": 4,
+  "models": [
+    {"id": "omnivoice", "family": "omnivoice",
+     "path": "/hf/hub/models--k2-fsa--OmniVoice/snapshots/c5fdb5ccb189668d56333f77ba2629f4cd7535f4",
+     "task": "tts", "mode": "offline",
+     "session_options": {"omnivoice.perf_mode": "flash_attention", "omnivoice.generator_weight_type": "f16"}}
+  ]
+}

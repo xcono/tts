@@ -84,6 +84,15 @@ Go side is a thin client. `llm/qwen3-tts` (faster-qwen3-tts) is the previous
 engine, kept behind the compose profile `qwen3`; both servers speak the same
 contract. If a Go-native TTS becomes viable, replace the `Client`.
 
+**Direction (decided 2026-11-17, not yet implemented).** Models sit behind a
+plain stateless HTTP API ("text fragment + voice → audio"); everything about
+conversation lives in Go: text preparation, cutting text into fragments,
+look-ahead synthesis, queueing, interruption. The hand-written Python server is
+to be replaced by vLLM-Omni serving OmniVoice, which returns one whole clip per
+request — so sentence cutting must move from `openai_server.py` into this module
+first. No WebSocket and no vLLM-Omni duplex API. Details, measurements and the
+working vLLM-Omni configuration: `docs/tts-engine.md`.
+
 ## Docs
 
 - `docs/tts-engine.md` — the current engine: settings, measurements, limits,
