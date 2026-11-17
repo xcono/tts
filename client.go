@@ -10,26 +10,91 @@ import (
 	"strings"
 
 	"github.com/xcono/tts/pkg/audio"
+	"github.com/xcono/tts/pkg/config"
 )
 
 // SampleRate is the TTS wire format's fixed output rate: 24 kHz mono 16-bit LE.
 const SampleRate = 24000
 
-// Client posts text to the local Qwen3-TTS server's OpenAI-compatible
+// Client posts text to the local server's OpenAI-compatible
 // POST /v1/audio/speech endpoint and returns synthesised PCM samples.
+//
+// The server is stateless: one request carries one text fragment and everything
+// that defines the voice, and returns the audio of that fragment. The fields
+// from Language down are what vLLM-Omni needs to clone a voice with OmniVoice;
+// left zero they are not sent, so a server with its own defaults still works.
 type Client struct {
 	BaseURL string       // e.g. "http://localhost:8007/v1"
 	Voice   string       // voice name; "" lets the server pick its default
 	Model   string       // optional; sent as the "model" field
 	HTTP    *http.Client // nil => http.DefaultClient
+
+	Language string  // e.g. "ru"; "" lets the server detect it
+	RefAudio string  // reference clip to clone, as the server sees it, e.g. "file:///ref/ref_stas.wav"
+	RefText  string  // exact transcript of RefAudio
+	Steps    int     // diffusion steps; 0 => server default
+	Guidance float64 // guidance scale; 0 => server default
 }
 
-// speechRequest mirrors the server's SpeechRequest pydantic model.
+// NewClient builds the local-server client from its config section, so a
+// consumer does not copy the fields one by one and miss the ones added later.
+func NewClient(c config.Qwen3Config) *Client {
+	return &Client{
+		BaseURL:  c.BaseURL,
+		Voice:    c.Voice,
+		Model:    c.Model,
+		Language: c.Language,
+		RefAudio: c.RefAudio,
+		RefText:  c.RefText,
+		Steps:    c.Steps,
+		Guidance: c.Guidance,
+	}
+}
+
+// speechRequest is the body of POST /v1/audio/speech. The fields after
+// ResponseFormat are vLLM-Omni's extensions to the OpenAI shape.
 type speechRequest struct {
-	Model          string `json:"model,omitempty"`
-	Input          string `json:"input"`
-	Voice          string `json:"voice,omitempty"`
-	ResponseFormat string `json:"response_format"`
+	Model          string       `json:"model,omitempty"`
+	Input          string       `json:"input"`
+	Voice          string       `json:"voice,omitempty"`
+	ResponseFormat string       `json:"response_format"`
+	Language       string       `json:"language,omitempty"`
+	RefAudio       string       `json:"ref_audio,omitempty"`
+	RefText        string       `json:"ref_text,omitempty"`
+	ExtraParams    *extraParams `json:"extra_params,omitempty"`
+}
+
+// extraParams carries the sampler settings vLLM-Omni passes through to the model.
+type extraParams struct {
+	Steps    int     `json:"num_inference_steps,omitempty"`
+	Guidance float64 `json:"guidance_scale,omitempty"`
+}
+
+// extra returns the sampler settings to send, or nil when none are set — an
+// empty extra_params object is not the same as an absent one to every server.
+func (c *Client) extra() *extraParams {
+	if c.Steps <= 0 && c.Guidance <= 0 {
+		return nil
+	}
+	return &extraParams{Steps: c.Steps, Guidance: c.Guidance}
+}
+
+// finalStop returns text ending in sentence punctuation, adding a full stop when
+// it has none. OmniVoice sometimes drops the last word of a Russian fragment
+// that does not end in one (k2-fsa/OmniVoice#204). Closing quotes and brackets
+// after the punctuation are allowed.
+func finalStop(text string) string {
+	text = strings.TrimSpace(text)
+	core := strings.TrimRight(text, "\"'»”)]")
+	if core == "" {
+		return text
+	}
+	for _, end := range []string{".", "!", "?", "…"} {
+		if strings.HasSuffix(core, end) {
+			return text
+		}
+	}
+	return text + "."
 }
 
 // post sends the speech request and returns the open response. The caller must
@@ -37,9 +102,13 @@ type speechRequest struct {
 func (c *Client) post(ctx context.Context, text string) (*http.Response, error) {
 	body, err := json.Marshal(speechRequest{
 		Model:          c.Model,
-		Input:          text,
+		Input:          finalStop(text),
 		Voice:          c.Voice,
 		ResponseFormat: "pcm", // raw int16 LE chunks, no header
+		Language:       c.Language,
+		RefAudio:       c.RefAudio,
+		RefText:        c.RefText,
+		ExtraParams:    c.extra(),
 	})
 	if err != nil {
 		return nil, err

@@ -99,18 +99,14 @@ func (s *Service) Status() Status { return Status(s.status.Load()) }
 func provider(c config.TTSConfig) (Provider, error) {
 	switch c.Provider {
 	case "qwen3":
-		return qwen3(c.Qwen3), nil
+		return NewClient(c.Qwen3), nil
 	case "elevenlabs":
 		return eleven(c.ElevenLabs), nil
 	case "fallback":
-		return &Fallback{Primary: eleven(c.ElevenLabs), Secondary: qwen3(c.Qwen3)}, nil
+		return &Fallback{Primary: eleven(c.ElevenLabs), Secondary: NewClient(c.Qwen3)}, nil
 	default:
 		return nil, fmt.Errorf("tts: unknown provider %q", c.Provider)
 	}
-}
-
-func qwen3(c config.Qwen3Config) *Client {
-	return &Client{BaseURL: c.BaseURL, Voice: c.Voice, Model: c.Model}
 }
 
 func eleven(c config.ElevenLabsConfig) *ElevenLabs {

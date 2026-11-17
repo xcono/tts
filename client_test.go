@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/xcono/tts/pkg/audio"
+	"github.com/xcono/tts/pkg/config"
 )
 
 func TestClientSynthesizeDecodesStreamedPCM(t *testing.T) {
@@ -56,8 +57,8 @@ func TestClientSynthesizeRequestShape(t *testing.T) {
 	if gotPath != "/v1/audio/speech" {
 		t.Errorf("path = %q, want /v1/audio/speech", gotPath)
 	}
-	if gotBody.Input != "hi" {
-		t.Errorf("input = %q, want hi", gotBody.Input)
+	if gotBody.Input != "hi." {
+		t.Errorf("input = %q, want %q (final stop added)", gotBody.Input, "hi.")
 	}
 	if gotBody.Voice != "stas" {
 		t.Errorf("voice = %q, want stas", gotBody.Voice)
@@ -165,5 +166,79 @@ func TestClientSynthesizeErrorStatus(t *testing.T) {
 	c := &Client{BaseURL: srv.URL + "/v1"}
 	if _, err := c.Synthesize(context.Background(), "hi"); err == nil {
 		t.Fatal("expected error for non-2xx status, got nil")
+	}
+}
+
+// A zero-value voice setup must not leak empty vLLM-Omni fields into the body:
+// a server with its own defaults has to keep working.
+func TestClientOmitsUnsetVoiceFields(t *testing.T) {
+	var raw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		_, _ = w.Write(audio.PCM16LE([]int16{1}))
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL + "/v1"}
+	if _, err := c.Synthesize(context.Background(), "Привет."); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"language", "ref_audio", "ref_text", "extra_params", "voice", "model"} {
+		if _, ok := raw[k]; ok {
+			t.Errorf("unset field %q was sent: %v", k, raw[k])
+		}
+	}
+}
+
+func TestClientSendsVoiceCloneFields(t *testing.T) {
+	var got struct {
+		Language    string `json:"language"`
+		RefAudio    string `json:"ref_audio"`
+		RefText     string `json:"ref_text"`
+		ExtraParams struct {
+			Steps    int     `json:"num_inference_steps"`
+			Guidance float64 `json:"guidance_scale"`
+		} `json:"extra_params"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write(audio.PCM16LE([]int16{1}))
+	}))
+	defer srv.Close()
+
+	c := NewClient(config.Qwen3Config{
+		BaseURL:  srv.URL + "/v1",
+		Language: "ru",
+		RefAudio: "file:///ref/ref_stas.wav",
+		RefText:  "Это нелегко.",
+		Steps:    32,
+		Guidance: 2.0,
+	})
+	if _, err := c.Synthesize(context.Background(), "Привет."); err != nil {
+		t.Fatal(err)
+	}
+	if got.Language != "ru" || got.RefAudio != "file:///ref/ref_stas.wav" || got.RefText != "Это нелегко." {
+		t.Errorf("voice fields = %+v", got)
+	}
+	if got.ExtraParams.Steps != 32 || got.ExtraParams.Guidance != 2.0 {
+		t.Errorf("extra_params = %+v, want 32 steps, guidance 2", got.ExtraParams)
+	}
+}
+
+func TestFinalStop(t *testing.T) {
+	for in, want := range map[string]string{
+		"Тесты прошли":          "Тесты прошли.",
+		"Тесты прошли.":         "Тесты прошли.",
+		"Готово!":               "Готово!",
+		"Правда?":               "Правда?",
+		"И так далее…":          "И так далее…",
+		"Он сказал «готово.»":   "Он сказал «готово.»",
+		"Он сказал «готово»":    "Он сказал «готово».",
+		"  ветка main, коммит ": "ветка main, коммит.",
+		"":                      "",
+	} {
+		if got := finalStop(in); got != want {
+			t.Errorf("finalStop(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

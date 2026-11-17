@@ -20,11 +20,20 @@ type TTSConfig struct {
 	ElevenLabs ElevenLabsConfig `json:"elevenlabs"`
 }
 
-// Qwen3Config configures the local Qwen3-TTS server (OpenAI-compatible).
+// Qwen3Config configures the local OpenAI-compatible server. The name is
+// historical (the first local engine was Qwen3-TTS); the consumer reads this
+// section too, so it stays. The fields from Language down are sent only when
+// set — they are what vLLM-Omni needs to clone a voice with OmniVoice.
 type Qwen3Config struct {
 	BaseURL string `json:"base_url"` // e.g. "http://localhost:8007/v1"
 	Voice   string `json:"voice"`    // optional; "" => server default
 	Model   string `json:"model"`    // optional
+
+	Language string  `json:"language"`  // e.g. "ru"
+	RefAudio string  `json:"ref_audio"` // reference clip as the server sees it, e.g. "file:///ref/ref_stas.wav"
+	RefText  string  `json:"ref_text"`  // exact transcript of ref_audio
+	Steps    int     `json:"steps"`     // diffusion steps; 0 => server default
+	Guidance float64 `json:"guidance"`  // guidance scale; 0 => server default
 }
 
 // ElevenLabsConfig configures the remote ElevenLabs backend.

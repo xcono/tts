@@ -33,15 +33,23 @@ func main() {
 	voice := flag.String("voice", "", "voice name; empty = server default")
 	text := flag.String("text", defaultText, "text to synthesise")
 	out := flag.String("o", "say.wav", "output WAV path")
+	// Voice-clone settings for a vLLM-Omni server (no -config). Unset ones are not sent.
+	var local config.Qwen3Config
+	flag.StringVar(&local.Language, "lang", "", "language, e.g. ru; empty = server detects")
+	flag.StringVar(&local.RefAudio, "ref-audio", "", "reference clip as the server sees it, e.g. file:///ref/ref_stas.wav")
+	flag.StringVar(&local.RefText, "ref-text", "", "exact transcript of -ref-audio")
+	flag.IntVar(&local.Steps, "steps", 0, "diffusion steps; 0 = server default")
+	flag.Float64Var(&local.Guidance, "guidance", 0, "guidance scale; 0 = server default")
 	flag.Parse()
+	local.BaseURL, local.Voice = *ttsURL, *voice
 
-	if err := run(*cfgPath, *provider, *ttsURL, *voice, *text, *out); err != nil {
+	if err := run(*cfgPath, *provider, local, *text, *out); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(cfgPath, provider, ttsURL, voice, text, out string) error {
-	svc, mode, err := build(cfgPath, provider, ttsURL, voice)
+func run(cfgPath, provider string, local config.Qwen3Config, text, out string) error {
+	svc, mode, err := build(cfgPath, provider, local)
 	if err != nil {
 		return err
 	}
@@ -80,7 +88,7 @@ func run(cfgPath, provider, ttsURL, voice, text, out string) error {
 // build returns a facade Service either from config.json or, lacking one, from
 // the flags (the common local-Qwen3 debug case). Mirrors tts.New's provider
 // switch so -provider qwen3|elevenlabs|fallback works without a config file.
-func build(cfgPath, provider, ttsURL, voice string) (*tts.Service, string, error) {
+func build(cfgPath, provider string, local config.Qwen3Config) (*tts.Service, string, error) {
 	if cfgPath != "" {
 		cfg, err := config.Load(cfgPath)
 		if err != nil {
@@ -91,7 +99,7 @@ func build(cfgPath, provider, ttsURL, voice string) (*tts.Service, string, error
 	}
 	switch provider {
 	case "qwen3", "":
-		return tts.NewWith(&tts.Client{BaseURL: ttsURL, Voice: voice}), "qwen3 " + ttsURL, nil
+		return tts.NewWith(tts.NewClient(local)), "local " + local.BaseURL, nil
 	default:
 		return nil, "", fmt.Errorf("provider %q needs -config (credentials)", provider)
 	}

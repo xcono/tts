@@ -1,0 +1,13 @@
+--- a/platforms/cuda/platform.py
++++ b/platforms/cuda/platform.py
+@@ -113,6 +113,10 @@
+         # FLASH_ATTN implementation that actually runs on Blackwell.
+         if is_blackwell:
+             flash_attn_supported = compute_supported and cls.has_flash_attn_4()
++            # xcono patch: vLLM's bundled FA2 (vllm.vllm_flash_attn) runs on sm_120;
++            # verified varlen vs SDPA max|diff| 0.002 bf16. Allow it on workstation Blackwell.
++            if not flash_attn_supported and compute_capability is not None and compute_capability.major == 12:
++                flash_attn_supported = compute_supported
+         else:
+             flash_attn_supported = compute_supported and packages_available
+ 

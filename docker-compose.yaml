@@ -45,6 +45,44 @@ services:
       start_period: 300s
     restart: unless-stopped
 
+  # The replacement server: vLLM-Omni serving the same model, about 0.5 s per
+  # sentence instead of 1.3 s. Behind a profile and on its own host port until
+  # the Go module is switched over (docs/tts-engine.md):
+  #
+  #   docker compose --profile vllm up -d tts-vllm    # vLLM-Omni on :8019
+  #
+  # One whole clip per request, no sentence streaming. The voice is passed in
+  # every request (ref_audio "file:///ref/ref_stas.wav" + ref_text).
+  tts-vllm:
+    profiles: ["vllm"]
+    build:
+      context: ./llm
+      dockerfile: vllm-omni/Dockerfile
+    image: xcono-tts-vllm
+    ipc: host                        # vLLM's worker processes share memory
+    ports:
+      - "${TTS_VLLM_PORT:-8019}:8007"
+    environment:
+      # Weights come from the shared cache; never reach out to the Hub at start.
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${HF_HUB_OFFLINE:-1}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${TTS_GPU:-1}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    restart: unless-stopped
+
   # Previous engine. Not started by default; same contract on another host port.
   tts-qwen3:
     profiles: ["qwen3"]
