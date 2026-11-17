@@ -14,7 +14,7 @@ Last updated 2026-11-18.
 | Contract | `POST /v1/audio/speech`: one text fragment + the voice → one whole clip, raw 24 kHz mono int16 LE (`response_format: "pcm"`); `GET /health` |
 | Voice | cloned from `llm/vllm-omni/ref_stas.wav` (11.8 s, baked into the image at `/ref/`) with its exact transcript `ref_stas.txt`; sent in every request |
 | Settings | 32 steps, guidance 2.0, language `ru` — chosen by ear, do not change for speed. Defaults in `pkg/config`. |
-| GPU | RTX 5060 Ti 16 GB (Blackwell sm_120), compose default `TTS_GPU=1`; about 5.3 GB on the card with the server idle (`nvidia-smi`, 2026-11-18) |
+| GPU | RTX 5060 Ti 16 GB (Blackwell sm_120), compose default `TTS_GPU=1`; 5.3–5.6 GB on the card (`nvidia-smi`, 2026-11-18). The model itself needs about 3 GB; the rest is vLLM's caches, which grow a little with use inside the `gpu_memory_utilization: 0.5` budget. Steady growth beyond that would be a leak. |
 
 The server is stateless and returns a clip whole. Everything about conversation
 is in the Go module: `pkg/play.Speaker` decides what goes into each request,
