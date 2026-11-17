@@ -20,9 +20,10 @@ const SampleRate = 24000
 // POST /v1/audio/speech endpoint and returns synthesised PCM samples.
 //
 // The server is stateless: one request carries one text fragment and everything
-// that defines the voice, and returns the audio of that fragment. The fields
-// from Language down are what vLLM-Omni needs to clone a voice with OmniVoice;
-// left zero they are not sent, so a server with its own defaults still works.
+// that defines the voice, and returns the audio of that fragment as one clip.
+// The fields from Language down are what vLLM-Omni needs to clone a voice with
+// OmniVoice. A Client built by hand sends only the fields that are set;
+// NewClient fills the project defaults.
 type Client struct {
 	BaseURL string       // e.g. "http://localhost:8007/v1"
 	Voice   string       // voice name; "" lets the server pick its default
@@ -38,7 +39,10 @@ type Client struct {
 
 // NewClient builds the local-server client from its config section, so a
 // consumer does not copy the fields one by one and miss the ones added later.
+// Zero fields take the project defaults (config.Qwen3Config.WithDefaults): an
+// empty section speaks with the stock voice.
 func NewClient(c config.Qwen3Config) *Client {
+	c = c.WithDefaults()
 	return &Client{
 		BaseURL:  c.BaseURL,
 		Voice:    c.Voice,

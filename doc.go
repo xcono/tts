@@ -6,7 +6,7 @@
 // The contract has three layers:
 //
 //   - Provider (provider.go) — the streaming + one-shot synthesis backends:
-//     *Client (local Qwen3-TTS), *ElevenLabs (cloud), and *Fallback (degrade to
+//     *Client (local server), *ElevenLabs (cloud), and *Fallback (degrade to
 //     local). All emit 24 kHz mono int16 LE PCM (SampleRate).
 //   - Service (tts.go) — the synthesis facade: Stream / Batch / Status (ready →
 //     processing → speaking → ready). Produces PCM; it touches no audio device.

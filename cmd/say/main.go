@@ -4,7 +4,7 @@
 // pure-Go (no audio device), so it runs headless — play the result with any
 // player, e.g. `aplay say.wav`.
 //
-//	go run ./cmd/say -text "Привет, мир" -o out.wav      # local Qwen3-TTS (:8007)
+//	go run ./cmd/say -text "Привет, мир" -o out.wav      # local server (:8007)
 //	go run ./cmd/say -config config.json -text "..."     # provider from config
 //	go run ./cmd/say -provider elevenlabs -config config.json
 package main
@@ -29,17 +29,17 @@ const defaultText = `Привет! Это проверка локального 
 func main() {
 	cfgPath := flag.String("config", "", "path to config.json (overrides -tts/-voice)")
 	provider := flag.String("provider", "qwen3", "provider when no -config: qwen3 | elevenlabs | fallback")
-	ttsURL := flag.String("tts", "http://localhost:8007/v1", "Qwen3-TTS base URL (no -config)")
+	ttsURL := flag.String("tts", "http://localhost:8007/v1", "local TTS server base URL (no -config)")
 	voice := flag.String("voice", "", "voice name; empty = server default")
 	text := flag.String("text", defaultText, "text to synthesise")
 	out := flag.String("o", "say.wav", "output WAV path")
-	// Voice-clone settings for a vLLM-Omni server (no -config). Unset ones are not sent.
+	// Voice settings for the local server (no -config). Unset ones take the project defaults.
 	var local config.Qwen3Config
-	flag.StringVar(&local.Language, "lang", "", "language, e.g. ru; empty = server detects")
-	flag.StringVar(&local.RefAudio, "ref-audio", "", "reference clip as the server sees it, e.g. file:///ref/ref_stas.wav")
+	flag.StringVar(&local.Language, "lang", "", "language; empty = ru")
+	flag.StringVar(&local.RefAudio, "ref-audio", "", "reference clip as the server sees it; empty = the stock voice")
 	flag.StringVar(&local.RefText, "ref-text", "", "exact transcript of -ref-audio")
-	flag.IntVar(&local.Steps, "steps", 0, "diffusion steps; 0 = server default")
-	flag.Float64Var(&local.Guidance, "guidance", 0, "guidance scale; 0 = server default")
+	flag.IntVar(&local.Steps, "steps", 0, "diffusion steps; 0 = 32")
+	flag.Float64Var(&local.Guidance, "guidance", 0, "guidance scale; 0 = 2.0")
 	flag.Parse()
 	local.BaseURL, local.Voice = *ttsURL, *voice
 
@@ -86,7 +86,7 @@ func run(cfgPath, provider string, local config.Qwen3Config, text, out string) e
 }
 
 // build returns a facade Service either from config.json or, lacking one, from
-// the flags (the common local-Qwen3 debug case). Mirrors tts.New's provider
+// the flags (the common local debug case). Mirrors tts.New's provider
 // switch so -provider qwen3|elevenlabs|fallback works without a config file.
 func build(cfgPath, provider string, local config.Qwen3Config) (*tts.Service, string, error) {
 	if cfgPath != "" {

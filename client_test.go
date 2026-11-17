@@ -242,3 +242,27 @@ func TestFinalStop(t *testing.T) {
 		}
 	}
 }
+
+// An empty config section must speak with the project's voice: voices builds the
+// client from its own config and sets only the URL.
+func TestNewClientFillsDefaults(t *testing.T) {
+	c := NewClient(config.Qwen3Config{BaseURL: "http://tts:8007/v1"})
+	if c.BaseURL != "http://tts:8007/v1" {
+		t.Errorf("BaseURL = %q, want the configured one", c.BaseURL)
+	}
+	if c.Language != config.DefaultLanguage || c.Steps != config.DefaultSteps || c.Guidance != config.DefaultGuidance {
+		t.Errorf("sampler defaults not applied: %+v", c)
+	}
+	if c.RefAudio != config.DefaultRefAudio || c.RefText != config.DefaultRefText {
+		t.Errorf("reference defaults not applied: %q / %q", c.RefAudio, c.RefText)
+	}
+}
+
+// A named voice selects one stored on the server; the default reference clip
+// must not override it.
+func TestNewClientKeepsNamedVoice(t *testing.T) {
+	c := NewClient(config.Qwen3Config{Voice: "stas"})
+	if c.RefAudio != "" || c.RefText != "" {
+		t.Errorf("reference sent alongside a named voice: %q / %q", c.RefAudio, c.RefText)
+	}
+}

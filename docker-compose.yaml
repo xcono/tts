@@ -1,69 +1,36 @@
-# Standalone TTS service for the xcono/tts module: an OpenAI-compatible speech
-# server on :8007 (voice clone, raw 24 kHz PCM stream).
+# The TTS inference server for the xcono/tts module: vLLM-Omni serving OmniVoice
+# (k2-fsa/OmniVoice) on :8007 — POST /v1/audio/speech, one whole 24 kHz PCM clip
+# per request, voice cloned from the reference baked into the image.
 #
-# Default engine: OmniVoice (llm/omnivoice) — picked 2026-11-17 in a blind
-# listening test against ZONOS3-Mini and Qwen3-TTS (see docs/tts-engine.md).
-# The previous engine, faster-qwen3-tts, stays available behind a profile:
+#   docker compose up -d                 # build llm/vllm-omni, serve :8007
+#   go run ./cmd/say -text "..."         # synthesise against :8007 (writes a WAV)
+#   go run ./cmd/play -text "..."        # synthesise and play on the speaker
 #
-#   docker compose up -d                             # OmniVoice on :8007
-#   docker compose --profile qwen3 up -d tts-qwen3   # Qwen3-TTS on :8009
-#   go run ./cmd/say -text "..."                     # synthesise against :8007 (writes a WAV)
+# The server is stateless: everything about conversation — cutting text into
+# fragments, queueing, barge-in — lives in the Go module (pkg/play).
+# Measurements, the two patches and the reasons: docs/tts-engine.md.
 #
 # Decoupled from xcono/voices but joins the same `voices` network and reuses the
 # shared HF weight cache, so the orchestrator reaches it as `tts:8007` when both
 # stacks are up — and it still runs on its own for TTS debugging.
 #
 # DO NOT build/up in a sandbox — needs the GPU box + NVIDIA Container Toolkit.
+# The base image is 35 GB; build with the local builder (BUILDX_BUILDER=default)
+# so it is not pulled again into a container builder's own cache.
 
 name: tts
 
 services:
   tts:
     build:
-      context: ./llm                 # shared context: the image copies qwen3-tts/ref_stas.wav
-      dockerfile: omnivoice/Dockerfile
-    image: xcono-tts
-    ports:
-      - "8007:8007"
-    environment:
-      OMNIVOICE_MODEL: ${OMNIVOICE_MODEL:-k2-fsa/OmniVoice}
-      OMNIVOICE_NUM_STEP: ${OMNIVOICE_NUM_STEP:-32}   # 16 is faster, 32 is the quality default
-    volumes:
-      - hf-cache:/root/.cache/huggingface
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["${TTS_GPU:-1}"]   # GPU1 by default; override for a single-card box
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 300s
-    restart: unless-stopped
-
-  # The replacement server: vLLM-Omni serving the same model, about 0.5 s per
-  # sentence instead of 1.3 s. Behind a profile and on its own host port until
-  # the Go module is switched over (docs/tts-engine.md):
-  #
-  #   docker compose --profile vllm up -d tts-vllm    # vLLM-Omni on :8019
-  #
-  # One whole clip per request, no sentence streaming. The voice is passed in
-  # every request (ref_audio "file:///ref/ref_stas.wav" + ref_text).
-  tts-vllm:
-    profiles: ["vllm"]
-    build:
-      context: ./llm
-      dockerfile: vllm-omni/Dockerfile
+      context: ./llm/vllm-omni
     image: xcono-tts-vllm
     ipc: host                        # vLLM's worker processes share memory
     ports:
-      - "${TTS_VLLM_PORT:-8019}:8007"
+      - "8007:8007"
     environment:
       # Weights come from the shared cache; never reach out to the Hub at start.
+      # Set HF_HUB_OFFLINE=0 for the first run on a machine without the weights.
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
       TRANSFORMERS_OFFLINE: ${HF_HUB_OFFLINE:-1}
     volumes:
@@ -73,38 +40,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${TTS_GPU:-1}"]
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 300s
-    restart: unless-stopped
-
-  # Previous engine. Not started by default; same contract on another host port.
-  tts-qwen3:
-    profiles: ["qwen3"]
-    build:
-      context: ./llm/qwen3-tts
-    image: xcono-tts-qwen3
-    ports:
-      - "8009:8007"
-    environment:
-      QWEN_TTS_MODEL: ${QWEN_TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-Base}  # 0.6B is the stable size on one card
-      # Self-heal: seconds a synthesis may stall before the server treats the CUDA
-      # context as wedged and exits for a clean restart. 0 disables. See
-      # llm/qwen3-tts/openai_server.py (the watchdog) + test_watchdog.py.
-      TTS_WATCHDOG_TIMEOUT: ${TTS_WATCHDOG_TIMEOUT:-120}
-    volumes:
-      - hf-cache:/root/.cache/huggingface
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["${TTS_GPU:-1}"]
+              device_ids: ["${TTS_GPU:-1}"]   # GPU1 by default; override for a single-card box
               capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8007/health"]

@@ -36,32 +36,46 @@ st := svc.Status()                       // ready | processing | speaking
 
 ## Providers
 
-- **qwen3** (default) — the local OpenAI-compatible server via
-  `POST /v1/audio/speech` (`response_format:"pcm"`), voice clone, streamed PCM.
-  The key keeps its historical name; the server behind it is now OmniVoice (see
-  below), and any server with the same contract works.
+- **qwen3** (default) — the local server via `POST /v1/audio/speech`
+  (`response_format:"pcm"`): one text fragment and the voice to clone in, one
+  whole PCM clip out. The key keeps its historical name; the server behind it is
+  vLLM-Omni with OmniVoice (see below).
 - **elevenlabs** — remote ElevenLabs Flash; streams `pcm_24000`.
 - **fallback** — ElevenLabs primary, local server secondary (degrade-to-local), so
   a cloud/network outage still speaks.
 
 ## Config
 
-`config.json` (schema in `pkg/config`); minimal `{}` defaults to the local server:
+`config.json` (schema in `pkg/config`); minimal `{}` defaults to the local server
+and the stock voice:
 
 ```json
 {
   "tts": {
     "provider": "qwen3",
-    "qwen3":      { "base_url": "http://localhost:8007/v1", "voice": "", "model": "" },
+    "qwen3": {
+      "base_url": "http://localhost:8007/v1",
+      "language": "ru",
+      "ref_audio": "file:///ref/ref_stas.wav",
+      "ref_text": "exact transcript of the reference clip",
+      "steps": 32,
+      "guidance": 2.0
+    },
     "elevenlabs": { "api_key": "", "voice_id": "", "model": "", "base_url": "" }
   }
 }
 ```
 
+Every `qwen3` field is optional: the values above are the defaults
+(`ref_text` defaults to the transcript of the clip baked into the server image).
+`ref_audio` is a path as the server sees it. Build the client with
+`tts.NewClient(cfg.TTS.Qwen3)` so the defaults apply.
+
 ## Speaker (the playback "mouth")
 
 `pkg/play.Speaker` owns the **output device** and turns reply text into sound —
-play-as-you-go, look-ahead synthesis, and chunk-granular **barge-in**. The
+play-as-you-go, look-ahead synthesis, merging of queued text into larger
+fragments, and chunk-granular **barge-in**. The
 consumer drives it by text and control only (never PCM), so all audio stays in
 this module:
 
@@ -69,10 +83,16 @@ this module:
 sp, err := play.NewSpeaker(&tts.Client{BaseURL: "http://localhost:8007/v1"})
 defer sp.Close()
 
-sp.Enqueue("Привет! Как дела?")   // queue a reply (paragraphs play in order)
-sp.Interrupt()                    // barge-in: stop within ~one chunk (on the ASR's VAD signal)
-st := sp.Status()                 // ready | processing | speaking
+sp.Enqueue("Привет! Как дела?")   // queue text; call it per sentence as the LLM streams
+sp.Interrupt()                    // barge-in: stop sound, abort the request, drop the queue
+st := sp.Status()                 // ready | processing | speaking — by what is actually heard
 ```
+
+The first enqueued text is synthesised at once, so sound starts in about half a
+second. Text that arrives while it is being synthesised and played goes out
+merged into one request (up to 250 characters; `play.WithMaxFragment`): the model
+intones one request as one passage, which sounds markedly better than a request
+per sentence. Requests go one at a time, one fragment ahead of playback.
 
 The device is [`ebitengine/oto`](https://github.com/ebitengine/oto) — **cgo-free**
 on Linux: pure-Go PulseAudio (`jfreymuth/pulse`) with an ALSA fallback loaded via
@@ -97,26 +117,19 @@ go run ./cmd/play -text "Привет, мир"                    # synthesise A
 
 ## The TTS server (external dependency)
 
-`llm/omnivoice/openai_server.py` is the OpenAI-compatible server for
-[OmniVoice](https://github.com/k2-fsa/OmniVoice) (Python — the model lib has no
-Go equivalent). Run it via Docker:
+`llm/vllm-omni` builds [vLLM-Omni](https://github.com/vllm-project/vllm-omni)
+v0.32.0 serving [OmniVoice](https://github.com/k2-fsa/OmniVoice), with two small
+patches for the RTX 50xx and the reference voice baked in:
 
 ```bash
-docker compose up -d        # builds llm/omnivoice, serves :8007
+BUILDX_BUILDER=default docker compose up -d --build   # serves :8007
 ```
 
-OmniVoice renders a whole utterance at once, so the server splits the input into
-sentences and streams each sentence's PCM as soon as it is rendered. It reads the
-text as written: expand numbers and abbreviations to words before synthesis. The
-model weights are CC-BY-NC (non-commercial).
-
-The previous engine, faster-qwen3-tts (`llm/qwen3-tts`), is kept behind a compose
-profile: `docker compose --profile qwen3 up -d tts-qwen3` serves it on `:8009`.
-Current state, measurements and next steps: [`docs/tts-engine.md`](docs/tts-engine.md).
-
-Planned: replace this server with vLLM-Omni serving the same model (about 0.5 s
-per sentence instead of 1.3 s on the RTX 5060 Ti) and move sentence cutting and
-queueing into the Go module.
+The server is stateless — a text fragment and a voice in, one clip out; about
+0.5 s for a sentence on an RTX 5060 Ti. It reads the text as written: expand
+numbers and abbreviations to words before synthesis. The model weights are
+CC-BY-NC (non-commercial). Settings, measurements and what was rejected:
+[`docs/tts-engine.md`](docs/tts-engine.md).
 
 The compose joins the shared `voices` network and reuses the `llms_hf-cache`
 volume, so it co-resides with the [`xcono/voices`](../voices) stack
@@ -133,6 +146,5 @@ Toolkit — don't build in a sandbox.**
 - `pkg/config` — config schema + loader.
 - `cmd/say` — debug binary: synthesise → WAV (headless).
 - `cmd/play` — debug binary: synthesise → play on the speaker (oto).
-- `llm/omnivoice` — the default Python TTS server + its Dockerfile.
-- `llm/qwen3-tts` — the previous server (compose profile `qwen3`); also holds the
-  shared reference voice `ref_stas.wav`.
+- `llm/vllm-omni` — the inference server image: Dockerfile, deploy config, two
+  patches, the reference voice `ref_stas.wav` + its transcript.

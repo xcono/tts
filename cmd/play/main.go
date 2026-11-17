@@ -37,11 +37,11 @@ func main() {
 	var local config.Qwen3Config
 	flag.StringVar(&local.BaseURL, "tts", "http://localhost:8007/v1", "local TTS server base URL")
 	flag.StringVar(&local.Voice, "voice", "", "voice name; empty = server default")
-	flag.StringVar(&local.Language, "lang", "", "language, e.g. ru; empty = server detects")
-	flag.StringVar(&local.RefAudio, "ref-audio", "", "reference clip as the server sees it, e.g. file:///ref/ref_stas.wav")
+	flag.StringVar(&local.Language, "lang", "", "language; empty = ru")
+	flag.StringVar(&local.RefAudio, "ref-audio", "", "reference clip as the server sees it; empty = the stock voice")
 	flag.StringVar(&local.RefText, "ref-text", "", "exact transcript of -ref-audio")
-	flag.IntVar(&local.Steps, "steps", 0, "diffusion steps; 0 = server default")
-	flag.Float64Var(&local.Guidance, "guidance", 0, "guidance scale; 0 = server default")
+	flag.IntVar(&local.Steps, "steps", 0, "diffusion steps; 0 = 32")
+	flag.Float64Var(&local.Guidance, "guidance", 0, "guidance scale; 0 = 2.0")
 
 	text := flag.String("text", defaultText, "text to speak")
 	gap := flag.Duration("gap", 300*time.Millisecond, "pause between sentences as they are enqueued (an LLM's pace); 0 = all at once")

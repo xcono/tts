@@ -1,147 +1,147 @@
 # TTS engine — current state
 
-The one current document about the local speech engine: what runs, what was
-decided, how it measures, and what is next. Everything under `docs/archive/` is
-history.
+The one current document about the local speech engine: what runs, why, how it
+measures, and what is left. Everything under `docs/archive/` is history.
 
-Last updated 2026-11-17 (evening).
+Last updated 2026-11-18.
 
-## What runs today
+## What runs
 
 | | |
 |---|---|
 | Model | [OmniVoice](https://github.com/k2-fsa/OmniVoice), weights `k2-fsa/OmniVoice` (3.27 GB, in the `llms_hf-cache` volume). Weights are **CC-BY-NC**. |
-| Server | `llm/omnivoice/openai_server.py`, image `xcono-tts`, compose service `tts`, port 8007 |
-| Contract | `POST /v1/audio/speech`, `response_format: "pcm"` → raw 24 kHz mono int16 LE; `GET /health` |
-| Voice | cloned from `llm/qwen3-tts/ref_stas.wav` (11.8 s) with its transcript; encoded once at startup |
-| Settings | `num_step` 32, `guidance_scale` 2.0, `language` ru — chosen by ear, do not change for speed |
-| Pinned deps | torch 2.11.0+cu128, transformers 5.15.1, omnivoice 0.2.1 (CUDA 12.8.1 base) |
-| GPU | RTX 5060 Ti 16 GB (Blackwell sm_120), compose default `TTS_GPU=1`, about 2.5 GB VRAM |
+| Server | [vLLM-Omni](https://github.com/vllm-project/vllm-omni) `v0.32.0`, image `xcono-tts-vllm` built from `llm/vllm-omni/`, compose service `tts`, port 8007 |
+| Contract | `POST /v1/audio/speech`: one text fragment + the voice → one whole clip, raw 24 kHz mono int16 LE (`response_format: "pcm"`); `GET /health` |
+| Voice | cloned from `llm/vllm-omni/ref_stas.wav` (11.8 s, baked into the image at `/ref/`) with its exact transcript `ref_stas.txt`; sent in every request |
+| Settings | 32 steps, guidance 2.0, language `ru` — chosen by ear, do not change for speed. Defaults in `pkg/config`. |
+| GPU | RTX 5060 Ti 16 GB (Blackwell sm_120), compose default `TTS_GPU=1`; about 5.3 GB on the card with the server idle (`nvidia-smi`, 2026-11-18) |
 
-The server splits the input into sentences and streams each sentence's PCM when
-rendered. The Go module is a thin client (`qwen3.base_url`, historical key name).
-The previous engine, faster-qwen3-tts, stays behind the compose profile `qwen3`
-on port 8009.
+The server is stateless and returns a clip whole. Everything about conversation
+is in the Go module: `pkg/play.Speaker` decides what goes into each request,
+queues, plays, and handles barge-in.
 
-## Decided direction (not yet implemented)
+## Architecture (decided 2026-11-17, implemented 2026-11-18)
 
-Agreed with the owner on 2026-11-17:
+1. **Models behind a plain HTTP API, conversation logic in Go.** "Text fragment +
+   voice → audio of that fragment". No WebSocket, no server-side streaming
+   protocol. vLLM-Omni's full-duplex and realtime APIs are not used: they serve
+   end-to-end speech models and merge ear, brain and mouth.
+2. **The Go side owns** text cutting, look-ahead synthesis, the queue, playback
+   and interruption (this module), capture and VAD (`xcono/asr`), and the brain
+   (`xcono/voices`). Contract for the brain: `Enqueue(text)`, `Interrupt()`,
+   `Status()`.
+3. Whisper through vLLM instead of whisper.cpp is a uniformity question for the
+   `asr` repo, not decided. GigaAM is no longer a candidate.
 
-1. **Models behind a plain HTTP API, conversation logic in Go.** The inference
-   server is stateless: "text fragment + voice → audio of that fragment" and
-   "audio segment → text". No WebSocket, no server-side streaming protocol.
-2. **The Go side owns** capture and VAD, the utterance queue, text preparation
-   (numbers, abbreviations, sparse stress marks), cutting text into fragments,
-   look-ahead synthesis, playback, and interruption (barge-in from VAD).
-   Contract for the "brain": utterance text comes in from the ear; "say this" and
-   "stop" go to the mouth.
-3. **Inference server: vLLM-Omni** (`vllm/vllm-omni:v0.32.0`) serving
-   `k2-fsa/OmniVoice`, replacing the hand-written Python server. Its full-duplex
-   and realtime WebSocket APIs are *not* used: they serve end-to-end speech
-   models (Qwen3-Omni, MiniCPM-o) and merge ear, brain and mouth.
-4. Whisper through vLLM instead of whisper.cpp is a uniformity question for the
-   `asr` repo, not a blocker. GigaAM is no longer a candidate.
+## How text becomes requests
 
-Order of work: move fragment cutting into Go → switch the server to vLLM-Omni →
-pin and document → stop touching the speech layer and move on to the brain.
+Implemented in `pkg/play/speaker.go`; the reasons are measured facts about this
+server and model.
 
-Fragment-cutting idea to try first (owner's, generalised): send the first
-sentence alone so audio starts at once; while a fragment plays, the next request
-takes everything accumulated so far, capped at 15–20 s of audio (OmniVoice is
-stable up to about 30 s per request; vLLM-Omni chunks above that by itself). A
-first fragment under 2–3 s of audio does not cover the synthesis of the next one.
-Whether larger fragments improve intonation is unverified — the owner judges by ear.
+- **One request at a time**; the next goes out as soon as the previous returns.
+- **The first enqueued text goes out as is** — first sound in about 0.5 s.
+- **Text queued meanwhile is merged** into one request, up to 250 characters
+  (about 18 s of speech; the model is stable to about 30 s per request). The
+  model intones one request as one passage.
+- **One fragment in reserve** beyond the one playing. Synthesis is about ten
+  times faster than speech, so a larger reserve brings sound no sooner; it only
+  takes away the chance to merge and adds work the server cannot cancel.
+- **Barge-in** flushes the device, closes the request and drops the queue.
 
-## Measurements (one protocol, 2026-11-17)
+Listening result (owner, 2026-11-18, five sentences fed 300 ms apart):
+
+| | Merged (cap 250) | A request per sentence (cap 0) |
+|---|---|---|
+| Requests | 3 | 5 |
+| First sound | 0.49 s | 0.50 s |
+| Verdict | sounds very good | stress errors appear; every sentence is intoned separately, "like a call to battle" |
+
+The seam between the first fragment and the second is audible: a jump in tone,
+the second part starts louder. Left as is for now. Ideas not tried: level-match
+neighbouring clips in Go; make the first fragment longer than one sentence.
+
+## Measurements (one protocol)
 
 Protocol: two fixed phrases, 5 repeats each, **15 s idle before every request**,
 GPU 1 at ~20 W and 37–42 °C before each request, time from request to the full
 audio of one phrase. Settings identical everywhere: our voice, 32 steps,
-guidance 2.0, Russian.
+guidance 2.0, Russian. Script: `docs/archive/2026-11-tts-selection/lab/latency/proto_vllm_omni.py PORT`.
 
 - Short (56 chars, 4.2 s audio): «Тесты прошли, изменения закоммичены, pull request открыт.»
 - Long (106 chars, 7.4 s audio): «Репозиторий лежит в корневой папке, все Go-файлы целы и не изменены, ветка main, последний коммит прежний.»
 
-| Variant | Short | Long | VRAM |
-|---|---|---|---|
-| Current server (PyTorch fp16, omnivoice 0.2.1) | 1.27 s | 1.51 s | 2.5 GB |
-| audio.cpp, f16 + `flash_attention` | 0.77 s | 1.00 s | 2.9 GB |
-| vLLM-Omni 0.32.0, bf16, defaults | 0.70 s | 0.88 s | 3.0 GB |
-| vLLM-Omni, bf16 + FLASH_ATTN (patch 1) | 0.55 s | 0.66 s | 3.0 GB |
-| **vLLM-Omni, bf16 + FLASH_ATTN + graph alignment 32 (patches 1+2)** | **0.48 s** | **0.66 s** | 3.0 GB |
-| Python server + FlashInfer | 0.46 s | 0.64 s | 3.2 GB |
+| Variant | Short | Long |
+|---|---|---|
+| Hand-written Python server (PyTorch fp16, omnivoice 0.2.1) — removed | 1.27 s | 1.51 s |
+| audio.cpp, f16 + `flash_attention` — rejected | 0.77 s | 1.00 s |
+| vLLM-Omni 0.32.0, bf16, defaults | 0.70 s | 0.88 s |
+| vLLM-Omni, bf16 + FLASH_ATTN (patch 1) | 0.55 s | 0.66 s |
+| **vLLM-Omni, bf16 + FLASH_ATTN + graph alignment 32 (patches 1+2) — what runs** | **0.48 s** | **0.66 s** |
+| Python server + FlashInfer — removed | 0.46 s | 0.64 s |
 
-Spread between repeats is 1–5 ms in every row. Scripts, raw output and configs:
-`docs/archive/2026-11-tts-selection/lab/latency/`.
+Spread between repeats is 1–5 ms in every row. The image built from
+`llm/vllm-omni/` was re-measured on 2026-11-18: 0.484 / 0.663 s.
 
-Not measured: latency after a long idle (minutes); cancellation behaviour;
-two vLLM processes on one card.
+Other measured facts (2026-11-17/18, raw logs were kept outside the repo):
 
-Earlier back-to-back runs held the card at 100 % / 150–170 W / 70 °C. Their
-numbers happened to match the protocol, but that load pattern is not acceptable
-on this machine — always measure with pauses.
+- **No cancellation.** Closing the connection does not stop the render: OmniVoice
+  in v0.32.0 does not opt into in-run cancellation. A 29 s paragraph (2.0 s of
+  compute) aborted at 0.3 s kept the card busy 1.8–2.2 s more; a short phrase
+  sent right after came back in 1.82 s instead of 0.48 s. With fragments capped
+  at 250 characters the worst case is about 1.3 s; in practice ASR and the LLM
+  take longer than that after a barge-in.
+- **Idle does not slow it.** 0.488 s after 5 minutes idle, 0.487 s after 20
+  minutes (base 0.48 s). Only the first request after server start is slower
+  (0.64 s); no warm-up is done.
+- **A stored voice is not faster.** `POST /v1/audio/voices` saves the clip; a
+  request by voice name gets it substituted as `ref_audio` (0.66 s vs 0.663 s).
+  Stored voices live in `SPEAKER_SAMPLES_DIR` inside the container and vanish
+  when it is recreated. Hence: the reference goes in every request.
+- **Through the Speaker**, with a real device: first sound 0.49 s; a new reply
+  after barge-in is requested within 0.1 s and rendered in 0.4 s.
 
-## vLLM-Omni configuration that reached 0.48 / 0.66 s
+Earlier back-to-back runs held the card at 100 % / 150–170 W / 70 °C. That load
+pattern is not acceptable on this machine — always measure with pauses.
 
-Everything needed is in `docs/archive/2026-11-tts-selection/lab/latency/vllm-omni/`
-(`start.sh`, `omnivoice-bf16.yaml`, `request.json`, patches). To be promoted to
-`llm/` when the server is switched.
+## The server image
 
-- Image `vllm/vllm-omni:v0.32.0` (9.95 GB compressed, 35 GB on disk; torch 2.13,
-  CUDA 13.0 — driver 580.178 reports CUDA 13.0). Model from the existing HF
-  cache, `HF_HUB_OFFLINE=1`.
+`llm/vllm-omni/`: `Dockerfile`, `omnivoice.yaml`, `patches/`, `ref_stas.wav`,
+`ref_stas.txt`.
+
+- Base `vllm/vllm-omni:v0.32.0` (9.95 GB compressed, 35 GB on disk; torch 2.13,
+  CUDA 13.0 — driver 580.178 reports CUDA 13.0). Model from the shared HF cache,
+  `HF_HUB_OFFLINE=1` by default.
 - Deploy config: `dtype: bfloat16`, `max_num_seqs: 1`,
   `gpu_memory_utilization: 0.5`; flag `--diffusion-attention-backend FLASH_ATTN`.
-- **Patch 1** (4 lines, `vllm_omni/platforms/cuda/platform.py`): allow the
-  bundled FlashAttention 2 on sm_120. Without it the server refuses FLASH_ATTN
-  on this card.
+- **Patch 1** (4 lines, `platforms/cuda/platform.py`): allow the bundled
+  FlashAttention 2 on sm_120. Without it the server refuses FLASH_ATTN on this card.
 - **Patch 2** (one constant, `omnivoice_generator.py`):
   `_LAZY_CAPTURE_ALIGNMENT` 128 → 32, less padding for single requests.
-- Both patched files are mounted read-only over the image; no rebuild. They are
-  tied to v0.32.0 — re-derive them on any upgrade.
-- Request: `ref_audio: "file:///ref/ref_stas.wav"` (needs
-  `--allowed-local-media-path`), `ref_text`, `language: "ru"`,
-  `response_format: "pcm"`, `extra_params: {num_inference_steps: 32, guidance_scale: 2.0}`.
-  A voice can also be uploaded once via `POST /v1/audio/voices` (same speed).
-- Worker logs are lost in v0.32.0 (vllm-omni#8517); `sitecustomize-worker-logs.py`
-  mirrors them. With it the log confirms FLASH_ATTN and CUDA graphs are in use.
-
-Differences from the current server that the Go side must account for:
-
-- **No sentence streaming.** One request returns one whole clip; the server
-  chunks only above ~30 s of estimated audio.
+- Patches are applied at build time with `git apply`; the build fails if the
+  source no longer matches. They are tied to v0.32.0 — re-derive on any upgrade.
+- Build with `BUILDX_BUILDER=default`: a `docker-container` builder pulls the
+  35 GB base again into its own cache.
 - **Fixed post-processing** on cloned output: gaps ≥ 500 ms removed, edge silence
   trimmed, 100 ms fades and 100 ms of silence added, level matched to the
   reference. It cannot be switched off. The owner listened: pauses are shorter,
   the result sounds good and natural.
+- Worker logs are lost in v0.32.0 (vllm-omni#8517); the archive has a
+  `sitecustomize` workaround (`lab/latency/vllm-omni/`).
 - Did not help: `enforce_eager: false` (torch.compile), `step_execution`,
   float16 (slower than bf16), no CUDA graphs. Not tried: `OMNIVOICE_TF32`, FA4.
 
-## Fallback: FlashInfer in the current Python server
-
-Works on this card and is marginally the fastest, with the original model code.
-Kept until the switch to vLLM-Omni is done.
-
-- Lab image `xcono-tts-lab:flashinfer`, built by `llm/omnivoice/Dockerfile.flashinfer`
-  on top of `xcono-tts`: `flashinfer-python==0.6.15.post1`,
-  `flashinfer-jit-cache==0.6.15.post1+cu128`, and OmniVoice from git commit
-  `08be0b4c` (PyPI 0.2.1 has no FlashInfer module).
-- Server options, both off by default: `OMNIVOICE_FLASHINFER=off|on|graph`,
-  `OMNIVOICE_SEED`.
-- Required on sm_120: `FLASHINFER_CUDA_ARCH_LIST=12.0a` (FlashInfer 0.6.15
-  rejects consumer Blackwell on CUDA 12.8; the prebuilt kernels are there) and
-  `FLASHINFER_DISABLE_JIT=1`.
-- Use mode `on`. Mode `graph` is no faster and grows VRAM with every new
-  sentence length (11 GB after 90 requests).
-
 ## Rejected
 
+- **The hand-written Python server** (with or without FlashInfer). FlashInfer
+  was marginally the fastest (0.46 / 0.64 s) but needed our own server, OmniVoice
+  from an unreleased git commit and an override for sm_120. Removed on
+  2026-11-18; last commit with it: `ad2466d`.
 - **audio.cpp** — runs on this card from the published image and loads the
-  original safetensors, but is slower than both options above. Its `native`
-  precision is f32; a fair comparison needs `omnivoice.generator_weight_type=f16`.
+  original safetensors, but is slower than vLLM-Omni.
 - **RealtimeTTS** — a Python library that does the cutting, queueing and playback
-  itself, i.e. the role reserved for Go; re-encodes the reference every sentence.
+  itself, i.e. the role of the Go module; re-encodes the reference every sentence.
 - Fewer steps (16) and a 5 s reference are faster but were rejected by ear.
+- **A request per sentence** — see the listening result above.
 
 ## Known limits of the model
 
@@ -151,13 +151,22 @@ Kept until the switch to vLLM-Omni is done.
 - **Text is read as written.** No Russian number or abbreviation expansion.
   Latin IT terms are read correctly as is.
 - **No emotion control**; only inline tags such as `[laughter]`, `[sigh]`.
-- **No streaming inside a phrase** — a clip is ready whole or not at all.
-- The reference clip is re-processed on every pass: the same sentence without a
+- **No streaming inside a request** — a clip is ready whole or not at all.
+- **The last word can be dropped** when a Russian fragment has no final stop
+  (OmniVoice #204); `tts.Client` appends one.
+- The reference clip is processed on every pass: the same sentence without a
   reference renders about 2.5× faster. Reference length is the largest remaining
   speed lever, at a cost the owner hears.
-- Current Python server only: appends a final stop (last word can be cut in
-  Russian without one) and merges fragments under 25 characters. This logic must
-  move to Go with the cutting.
+- The same text does not always take the same time to say (1.7–2.1 s for one
+  short phrase across runs): the model is not deterministic.
+
+## Not done
+
+- A dictionary for numbers, abbreviations and the few mis-stressed words (text
+  preparation before `Enqueue`).
+- The audible seam after the first fragment.
+- Up to 100 ms between a finished synthesis and the next request: the playback
+  loop looks at events between 100 ms device writes. Does not affect first sound.
 
 ## Why OmniVoice
 
@@ -169,25 +178,8 @@ Chosen by the owner's ear on his own text and voice, not by benchmarks.
 | ZONOS3-Mini | Clean and fast, but a narrower, slightly metallic sound. Has true streaming, emotion controls, Apache-2.0 weights. The runner-up. |
 | Qwen3-TTS 1.7B ru-stress-cf | Honours stress marks, but 4× slower, with a slight foreign accent. |
 
-## Reviving the runner-ups
-
-**ZONOS3-Mini.** Source and CUDA build are kept outside the repo in
-`~/.cache/tts-lab/zonos3/src`; build image `xcono-tts-lab:zonos3-build`
-(Dockerfile in the archive, `lab/zonos3/`). Run:
-
-```bash
-docker run -d --name zonos3-lab --gpus device=0 -p 1919:1919 \
-  -v ~/.cache/tts-lab/zonos3/src:/src xcono-tts-lab:zonos3-build \
-  ./build-cuda/zonos3-server gguf/backbone-ptq.gguf --gpu --host 0.0.0.0 --port 1919
-```
-
-`POST /v2/generate` with `language: "ru"`, `text_normalization: false`,
-`decoder: "full_mr"`, `speaker_mode: "embedding"`, `stream: false`,
-`format: "wav"`. Output is 44.1 kHz. Never download the whole HF repo (30.7 GB).
-
-**Qwen3-TTS 1.7B ru-stress-cf** (`siriusfreak/qwen3-tts-12hz-1.7b-ru-stress-cf`).
-Loads with transformers 5.15.1 (5.20 breaks it). Use the stock `qwen_tts` path;
-`faster-qwen3-tts` cuts about half of short phrases. 13–14 s for 25 s of speech.
+The search itself — reports, scripts, Dockerfiles for the runner-ups — is in
+`docs/archive/2026-11-tts-selection/`.
 
 ## Rules that came out of this work
 

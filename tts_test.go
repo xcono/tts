@@ -105,7 +105,7 @@ func TestServiceUnknownProvider(t *testing.T) {
 }
 
 func TestNewBuildsConfiguredProvider(t *testing.T) {
-	// "fallback" wires ElevenLabs primary + Qwen3 secondary; just assert New
+	// "fallback" wires ElevenLabs primary + local secondary; just assert New
 	// accepts it and returns a usable Service (no network call here).
 	svc, err := New(&config.Config{TTS: config.TTSConfig{Provider: "fallback"}})
 	if err != nil {

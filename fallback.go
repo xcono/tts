@@ -6,7 +6,7 @@ import (
 )
 
 // Fallback runs Primary and, only if it fails BEFORE emitting any audio, degrades
-// to Secondary — e.g. cloud ElevenLabs primary, local Qwen secondary, so a cloud
+// to Secondary — e.g. cloud ElevenLabs primary, local server secondary, so a cloud
 // outage or offline box still speaks.
 //
 // Two rules keep it honest:

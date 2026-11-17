@@ -8,7 +8,7 @@ import http.client, json, subprocess, sys, time, statistics, wave
 PORT=int(sys.argv[1]); PAUSE=15
 SHORT="Тесты прошли, изменения закоммичены, pull request открыт."
 LONG="Репозиторий лежит в корневой папке, все Go-файлы целы и не изменены, ветка main, последний коммит прежний."
-REF_AUDIO="file:///ref/ref_stas.wav"  # llm/qwen3-tts/ref_stas.wav mounted read-only
+REF_AUDIO="file:///ref/ref_stas.wav"  # the reference voice inside the server image
 VOICE=__import__("os").environ.get("VOICE")  # uploaded voice name (POST /v1/audio/voices) instead of inline ref_audio
 REF_TEXT=("Это нелегко. Ты думаешь, меня окружают прекрасные люди. Лучшей командой желать нельзя. "
           "Но всё равно что-то может пройти не так. Этот мир не прощает ошибок. Он жесток.")

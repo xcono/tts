@@ -1,8 +1,5 @@
 # vLLM-Omni serving OmniVoice (k2-fsa/OmniVoice): POST /v1/audio/speech.
 #
-# Build context is ./llm (see docker-compose.yaml) so the reference voice can be
-# copied from qwen3-tts/ until it moves here.
-#
 # The image tag is PINNED. Both patches below are tied to v0.32.0 and are
 # re-derived, not carried over, on any upgrade — `git apply` fails the build if
 # the upstream source no longer matches, and the greps check the result.
@@ -17,7 +14,7 @@
 
 FROM vllm/vllm-omni:v0.32.0
 
-COPY vllm-omni/patches/ /tmp/patches/
+COPY patches/ /tmp/patches/
 RUN cd /usr/local/lib/python3.12/dist-packages/vllm_omni \
     && git apply --verbose /tmp/patches/01-flash-attn-sm120.patch \
                            /tmp/patches/02-lazy-graph-align32.patch \
@@ -25,9 +22,11 @@ RUN cd /usr/local/lib/python3.12/dist-packages/vllm_omni \
     && grep -q "_LAZY_CAPTURE_ALIGNMENT = 32" model_executor/models/omnivoice/omnivoice_generator.py \
     && rm -rf /tmp/patches
 
-COPY vllm-omni/omnivoice.yaml /cfg/omnivoice.yaml
-# The cloned voice. Requests name it as ref_audio "file:///ref/ref_stas.wav".
-COPY qwen3-tts/ref_stas.wav /ref/ref_stas.wav
+COPY omnivoice.yaml /cfg/omnivoice.yaml
+# The cloned voice. Requests name it as ref_audio "file:///ref/ref_stas.wav" and
+# send its exact transcript (ref_stas.txt) as ref_text; both are the Go module's
+# defaults (pkg/config). Replace the pair together.
+COPY ref_stas.wav /ref/ref_stas.wav
 
 ENV HF_HOME=/root/.cache/huggingface
 EXPOSE 8007

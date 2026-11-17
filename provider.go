@@ -12,7 +12,7 @@ type Synthesizer interface {
 
 // Provider is the full text-to-speech contract: streaming (Synthesizer) plus
 // one-shot synthesis, all in 24 kHz mono int16 LE PCM (SampleRate). The local
-// Qwen3-TTS *Client is one implementation; cloud backends (e.g. *ElevenLabs) sit
+// server *Client is one implementation; cloud backends (e.g. *ElevenLabs) sit
 // behind the same interface, and a degrade-to-local *Fallback is just another
 // Provider. Implementations MUST emit at SampleRate.
 //

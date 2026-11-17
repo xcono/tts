@@ -94,7 +94,7 @@ func (s *Service) Batch(ctx context.Context, text string) ([]int16, error) {
 func (s *Service) Status() Status { return Status(s.status.Load()) }
 
 // provider builds the configured backend. "fallback" wires cloud ElevenLabs as
-// primary and local Qwen3 as secondary (degrade-to-local), matching Fallback's
+// primary and the local server as secondary (degrade-to-local), matching Fallback's
 // design.
 func provider(c config.TTSConfig) (Provider, error) {
 	switch c.Provider {
